@@ -1,0 +1,8 @@
+{
+  "name": "Remix Uyanix Challenge Platform",
+  "description": "A comprehensive, pixel-perfect 30-day learning portal featuring gamified daily challenges, student assessments, teacher referral analytics, and administrative management tools.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
