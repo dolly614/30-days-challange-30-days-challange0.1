@@ -2,6 +2,10 @@ import type { Metadata, Viewport } from 'next';
 import { Plus_Jakarta_Sans, Fraunces, JetBrains_Mono } from 'next/font/google';
 import { Toaster } from 'sonner';
 import { OfflineIndicator } from '@/components/site/PWAInstallButton';
+import {
+  PUBLIC_CANONICAL_ORIGIN,
+  buildAuthoritativeSchemaOrgJsonLd,
+} from '@/lib/seo-canonical-url-governance';
 import './globals.css';
 
 const jakarta = Plus_Jakarta_Sans({
@@ -32,9 +36,13 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
+  metadataBase: new URL(PUBLIC_CANONICAL_ORIGIN),
   title: 'Uyanix 30 Days Challenge — Seekho, Compete Karo, Jeeto!',
   description:
     "India's biggest 30-day daily learning competition for Class 1–12. FREE registration. Win Laptop, Tablet & Smartphone + certificate.",
+  alternates: {
+    canonical: PUBLIC_CANONICAL_ORIGIN,
+  },
   authors: [{ name: 'Uyanix 30 Days Challenge' }],
   appleWebApp: {
     capable: true,
@@ -49,16 +57,17 @@ export const metadata: Metadata = {
     title: 'Uyanix 30 Days Challenge — Seekho, Compete Karo, Jeeto!',
     description:
       'Seekho, Compete Karo, Jeeto! Daily learning challenge for Indian students in Class 1–12.',
+    url: PUBLIC_CANONICAL_ORIGIN,
     type: 'website',
     siteName: 'Uyanix 30 Days Challenge',
-    images: ['/uyanix-logo.jpg'],
+    images: [`${PUBLIC_CANONICAL_ORIGIN}/uyanix-logo.jpg`],
   },
   twitter: {
     card: 'summary_large_image',
     title: 'Uyanix 30 Days Challenge',
     description:
       "India's biggest 30-day daily learning competition for Class 1–12. Register FREE, win Laptop, Tablet, Smartphone & Certificate.",
-    images: ['/uyanix-logo.jpg'],
+    images: [`${PUBLIC_CANONICAL_ORIGIN}/uyanix-logo.jpg`],
   },
 };
 
@@ -67,20 +76,7 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const jsonLd = {
-    '@context': 'https://schema.org',
-    '@type': 'WebApplication',
-    name: 'Uyanix 30 Days Challenge',
-    applicationCategory: 'EducationalApplication',
-    operatingSystem: 'All',
-    description:
-      "India's biggest 30-day daily learning competition for Class 1–12 students. FREE registration, daily chapters, 5 MCQs, and grand prizes.",
-    offers: {
-      '@type': 'Offer',
-      price: '0',
-      priceCurrency: 'INR',
-    },
-  };
+  const jsonLd = buildAuthoritativeSchemaOrgJsonLd();
 
   return (
     <html

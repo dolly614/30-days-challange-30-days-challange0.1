@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { User, Save, CheckCircle2, CreditCard, Flame } from 'lucide-react';
 import { Header } from '@/components/site/Header';
 import { Footer } from '@/components/site/Footer';
@@ -8,8 +9,21 @@ import { useUyanixStore } from '@/lib/store';
 import { toast } from 'sonner';
 
 export default function ProfilePage() {
-  const { currentUser, updateProfile, completedDays, payments, examAttempts } =
+  const router = useRouter();
+  const { currentUser, updateProfile, completedDays, payments, examAttempts, syncServerSession } =
     useUyanixStore();
+
+  useEffect(() => {
+    let active = true;
+    syncServerSession().then((serverUser) => {
+      if (active && !serverUser) {
+        router.replace('/login?redirect=/profile');
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [syncServerSession, router]);
 
   const [name, setName] = useState(currentUser?.name || 'dollysingh');
   const [classNum, setClassNum] = useState(String(currentUser?.classNum || 12));

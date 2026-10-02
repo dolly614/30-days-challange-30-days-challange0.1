@@ -1,0 +1,225 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Global Hardened Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        request.auth.token.email == 'dollysingh1268@gmail.com'
+      );
+    }
+
+    // Validation Blueprint: UserPublicProfile
+    function isValidUserPublicProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'name', 'classNum', 'school', 'city', 'role', 'idVerified', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'name', 'classNum', 'school', 'city', 'role', 'idVerified', 'createdAt', 'updatedAt']) &&
+        data.uid is string && data.uid == userId && isValidId(data.uid) &&
+        data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+        data.classNum is int && data.classNum >= 1 && data.classNum <= 12 &&
+        data.school is string && data.school.size() >= 1 && data.school.size() <= 160 &&
+        data.city is string && data.city.size() >= 1 && data.city.size() <= 100 &&
+        data.role is string && (data.role == 'student' || data.role == 'teacher' || data.role == 'admin') &&
+        data.idVerified is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: UserPrivateInfo (PII Isolated)
+    function isValidUserPrivateInfo(data, userId) {
+      return data.keys().hasAll(['uid', 'email', 'phone', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'phone', 'createdAt', 'updatedAt']) &&
+        data.uid is string && data.uid == userId && isValidId(data.uid) &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 160 &&
+        data.phone is string && data.phone.size() >= 10 && data.phone.size() <= 20 && data.phone.matches('^[0-9+\\-]+$') &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: AdminRecord
+    function isValidAdminRecord(data, adminId) {
+      return data.keys().hasAll(['uid', 'email', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'email', 'createdAt']) &&
+        data.uid is string && data.uid == adminId && isValidId(data.uid) &&
+        data.email is string && data.email.size() >= 3 && data.email.size() <= 160 &&
+        data.createdAt is timestamp;
+    }
+
+    // Validation Blueprint: TeacherRecord
+    function isValidTeacherRecord(data, teacherId) {
+      return data.keys().hasAll(['uid', 'code', 'status', 'balance', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['uid', 'code', 'status', 'balance', 'createdAt', 'updatedAt']) &&
+        data.uid is string && data.uid == teacherId && isValidId(data.uid) &&
+        data.code is string && data.code.size() >= 4 && data.code.size() <= 24 && data.code.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.status is string && (data.status == 'pending' || data.status == 'approved' || data.status == 'rejected') &&
+        data.balance is int && data.balance >= 0 && data.balance <= 10000000 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: ExamAttemptRecord
+    function isValidExamAttempt(data) {
+      return data.keys().hasAll(['uid', 'type', 'score', 'total', 'status', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'type', 'score', 'total', 'status', 'createdAt']) &&
+        data.uid is string && isValidId(data.uid) &&
+        data.type is string && (data.type == 'mid' || data.type == 'final') &&
+        data.score is int && data.score >= 0 && data.score <= 150 &&
+        data.total is int && data.total == 150 &&
+        data.status is string && data.status == 'completed' &&
+        data.createdAt is timestamp;
+    }
+
+    // Collection: /users/{userId}
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isSignedIn() && (existing().uid == request.auth.uid || isAdmin());
+
+      allow create: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isValidUserPublicProfile(incoming(), userId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        (
+          (isOwner(userId) && incoming().role == 'student' && incoming().idVerified == false) ||
+          isAdmin()
+        );
+
+      allow update: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isValidUserPublicProfile(incoming(), userId) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time &&
+        (
+          (isOwner(userId) &&
+            incoming().role == existing().role &&
+            incoming().idVerified == existing().idVerified &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['name', 'classNum', 'school', 'city', 'updatedAt'])) ||
+          isAdmin()
+        );
+
+      allow delete: if isValidId(userId) && isAdmin();
+
+      // Subcollection: /users/{userId}/private/{infoId}
+      match /private/{infoId} {
+        allow get: if isValidId(userId) && isValidId(infoId) && (isOwner(userId) || isAdmin()) &&
+          exists(/databases/$(database)/documents/users/$(userId));
+        allow list: if false;
+
+        allow create: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(infoId) &&
+          (isOwner(userId) || isAdmin()) &&
+          isValidUserPrivateInfo(incoming(), userId) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          exists(/databases/$(database)/documents/users/$(userId));
+
+        allow update: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(infoId) &&
+          isValidUserPrivateInfo(incoming(), userId) &&
+          incoming().uid == existing().uid &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          exists(/databases/$(database)/documents/users/$(userId)) &&
+          (
+            (isOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'phone', 'updatedAt'])) ||
+            isAdmin()
+          );
+
+        allow delete: if isValidId(userId) && isValidId(infoId) && isAdmin();
+      }
+    }
+
+    // Collection: /admins/{adminId}
+    match /admins/{adminId} {
+      allow get: if isValidId(adminId) && (isOwner(adminId) || isAdmin());
+      allow list: if false;
+      allow create: if isAdmin() &&
+        isValidId(adminId) &&
+        isValidAdminRecord(incoming(), adminId) &&
+        incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isValidId(adminId) && isAdmin();
+    }
+
+    // Collection: /teachers/{teacherId}
+    match /teachers/{teacherId} {
+      allow get: if isValidId(teacherId) && (isOwner(teacherId) || isAdmin());
+      allow list: if isSignedIn() && (existing().uid == request.auth.uid || isAdmin());
+
+      // Only Admin can approve or create teacher records with non-pending status or balance
+      allow create: if isVerifiedUser() &&
+        isValidId(teacherId) &&
+        isValidTeacherRecord(incoming(), teacherId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time &&
+        exists(/databases/$(database)/documents/users/$(teacherId)) &&
+        (
+          (isOwner(teacherId) && incoming().status == 'pending' && incoming().balance == 0) ||
+          isAdmin()
+        );
+
+      allow update: if isAdmin() &&
+        isValidId(teacherId) &&
+        isValidTeacherRecord(incoming(), teacherId) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time;
+
+      allow delete: if isValidId(teacherId) && isAdmin();
+    }
+
+    // Collection: /examAttempts/{attemptId}
+    match /examAttempts/{attemptId} {
+      allow get: if isValidId(attemptId) && isSignedIn() && (existing().uid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (existing().uid == request.auth.uid || isAdmin());
+
+      allow create: if isVerifiedUser() &&
+        isValidId(attemptId) &&
+        isValidExamAttempt(incoming()) &&
+        incoming().uid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid));
+
+      // Terminal State Locking: once status is 'completed', only Admin can modify
+      allow update: if isAdmin() &&
+        isValidId(attemptId) &&
+        isValidExamAttempt(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt;
+
+      allow delete: if isValidId(attemptId) && isAdmin();
+    }
+  }
+}

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, use } from 'react';
+import React, { useState, useEffect, use } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -28,10 +28,31 @@ export default function DailyChapterPage({
 }) {
   const resolvedParams = use(params);
   const router = useRouter();
+  const isValidDayParam = /^(?:[1-9]|[12]\d|30)$/.test(
+    String(resolvedParams.day || '').trim()
+  );
   const dayNum = Math.max(1, Math.min(30, Number(resolvedParams.day) || 1));
 
-  const { currentUser, savedChapters, completedDays, dailyScores, completeDay } =
+  const { currentUser, savedChapters, completedDays, dailyScores, completeDay, syncServerSession } =
     useUyanixStore();
+
+  useEffect(() => {
+    let active = true;
+    if (!isValidDayParam) {
+      router.replace('/dashboard');
+      return () => {
+        active = false;
+      };
+    }
+    syncServerSession().then((serverUser) => {
+      if (active && !serverUser) {
+        router.replace(`/login?redirect=/daily/${dayNum}`);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [syncServerSession, router, dayNum, isValidDayParam]);
 
   const classNum = currentUser?.classNum || 12;
   const baseChapter = generateChapterForClassAndDay(classNum, dayNum);

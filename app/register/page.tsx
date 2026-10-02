@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, Suspense } from 'react';
+import React, { useState, useRef, Suspense } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ShieldCheck, Upload, CheckCircle2, Sparkles } from 'lucide-react';
@@ -15,7 +15,7 @@ function RegisterContent() {
   const searchParams = useSearchParams();
   const refCode = searchParams.get('ref');
 
-  const { login, submitStudentIdVerification } = useUyanixStore();
+  const { login, syncServerSession, submitStudentIdVerification } = useUyanixStore();
 
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [name, setName] = useState('');
@@ -27,9 +27,15 @@ function RegisterContent() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [agreed, setAgreed] = useState(false);
   const [idFileName, setIdFileName] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const submittingLockRef = useRef(false);
+  const idempotencyKeyRef = useRef<string>('');
 
-  const handleStep1Submit = (e: React.FormEvent) => {
+  const handleStep1Submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submittingLockRef.current || isSubmitting) {
+      return;
+    }
     if (!agreed) {
       toast.error('Kripya Terms & Conditions accept karein.');
       return;
@@ -43,26 +49,89 @@ function RegisterContent() {
       return;
     }
 
-    login({
-      name: name.trim(),
-      teacherShortName: name.trim().split(' ')[0].toLowerCase(),
-      classNum: Number(classNum),
-      school: school.trim(),
-      phone: phone.trim(),
-      email: email.trim() || `${name.toLowerCase().replace(/\s+/g, '')}@student.uyanix.in`,
-      idVerified: false,
-    });
+    submittingLockRef.current = true;
+    setIsSubmitting(true);
 
-    toast.success('Account ban gaya! Ab apna Student ID verify karein 🪪');
-    setStep(2);
+    if (!idempotencyKeyRef.current) {
+      idempotencyKeyRef.current = `reg_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    }
+
+    try {
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': idempotencyKeyRef.current,
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          name: name.trim(),
+          classNum: Number(classNum),
+          school: school.trim(),
+          phone: phone.trim(),
+          email: email.trim(),
+          password,
+          confirmPassword,
+          agreed,
+          referralCode: refCode || undefined,
+          idempotencyKey: idempotencyKeyRef.current,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.user) {
+        idempotencyKeyRef.current = '';
+        toast.error(data.error || 'Registration failed. Please check your details.');
+        return;
+      }
+
+      // Synchronize client state strictly from the verified backend session
+      const authoritativeUser = (await syncServerSession()) || data.user;
+      login(authoritativeUser);
+      setPassword('');
+      setConfirmPassword('');
+      toast.success('Account ban gaya! Ab apna Student ID verify karein 🪪');
+      setStep(2);
+    } catch {
+      idempotencyKeyRef.current = '';
+      toast.error('Unable to create account right now. Please try again.');
+    } finally {
+      submittingLockRef.current = false;
+      setIsSubmitting(false);
+    }
   };
 
-  const handleStep2Verify = (e: React.FormEvent) => {
+  const handleStep2Verify = async (e: React.FormEvent) => {
     e.preventDefault();
-    const doc = idFileName || 'school-id-card.jpg';
-    submitStudentIdVerification(doc);
-    toast.success('Student ID uploaded & verified! Challenge unlocked 🎉');
-    setStep(3);
+    if (submittingLockRef.current || isSubmitting) {
+      return;
+    }
+    submittingLockRef.current = true;
+    setIsSubmitting(true);
+    try {
+      const doc = idFileName || 'school-id-card.jpg';
+      await fetch('/api/user/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ idCardName: doc }),
+      }).catch(() => {});
+      await fetch('/api/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          documentName: doc,
+          classNum: Number(classNum),
+        }),
+      }).catch(() => {});
+      submitStudentIdVerification(doc);
+      await syncServerSession();
+      toast.success('Student ID uploaded & verified! Challenge unlocked 🎉');
+      setStep(3);
+    } finally {
+      submittingLockRef.current = false;
+      setIsSubmitting(false);
+    }
   };
 
   const steps = [
@@ -266,6 +335,7 @@ function RegisterContent() {
 
             <button
               type="submit"
+              disabled={isSubmitting}
               className="mt-2 inline-flex h-12 w-full items-center justify-center gap-2 rounded-full bg-gradient-hero text-sm font-semibold text-primary-foreground shadow-soft transition hover:scale-[1.01] disabled:opacity-60"
             >
               Create Account &amp; Continue →

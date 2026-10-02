@@ -30,7 +30,20 @@ function ExamPortalContent() {
     examPaid,
     payForExam,
     submitExamAttempt,
+    syncServerSession,
   } = useUyanixStore();
+
+  useEffect(() => {
+    let active = true;
+    syncServerSession().then((serverUser) => {
+      if (active && !serverUser) {
+        router.replace(`/login?redirect=/exam?type=${examType}`);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [syncServerSession, router, examType]);
 
   const isPaid = examPaid[examType];
   const questions = customExamQuestions;
@@ -44,6 +57,29 @@ function ExamPortalContent() {
   const [secondsLeft, setSecondsLeft] = useState(45 * 60);
   const [showSubmitModal, setShowSubmitModal] = useState(false);
   const [paying, setPaying] = useState(false);
+  const [serverAttemptId, setServerAttemptId] = useState<string>('');
+  const [serverScore, setServerScore] = useState<number | null>(null);
+  const [serverCorrectCount, setServerCorrectCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (stage !== 'live') return;
+    fetch('/api/exam', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ action: 'START_ATTEMPT', examType }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.attemptId) {
+          setServerAttemptId(data.attemptId);
+          if (typeof data.remainingSeconds === 'number' && data.remainingSeconds > 0) {
+            setSecondsLeft(data.remainingSeconds);
+          }
+        }
+      })
+      .catch(() => {});
+  }, [stage, examType]);
 
   useEffect(() => {
     if (stage !== 'live') return;
@@ -63,37 +99,76 @@ function ExamPortalContent() {
   const handleRazorpayPay = async () => {
     setPaying(true);
     try {
+      const idemKey = `ord_${examType}_${currentUser?.id || 'session'}`;
       const res = await fetch('/api/payment', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': idemKey,
+        },
+        credentials: 'include',
         body: JSON.stringify({
           examType,
-          amount: 199,
-          userId: currentUser?.id || 'guest',
+          completeServerVerifiedCheckout: true,
         }),
       });
       const data = await res.json();
-      const orderId = data.orderId || `pay_Rzp_${Date.now()}`;
-      payForExam(examType, orderId);
-      toast.success(`₹199 Payment Verified via Razorpay (${orderId})! Exam Unlocked 🎉`);
+      if (!res.ok || !data?.success || !data?.orderId) {
+        toast.error(data?.error || 'Payment verification failed. Please try again.');
+        return;
+      }
+      payForExam(examType, data.orderId);
+      toast.success(`₹199 Payment Verified via Razorpay (${data.orderId})! Exam Unlocked 🎉`);
       setStage('instructions');
     } catch {
-      payForExam(examType, `pay_Rzp_${Date.now()}`);
-      toast.success('₹199 Payment Verified! Exam Unlocked 🎉');
-      setStage('instructions');
+      toast.error('Unable to reach payment verification server. Please try again.');
     } finally {
       setPaying(false);
     }
   };
 
-  const handleFinalSubmit = () => {
+  const handleFinalSubmit = async () => {
     let correct = 0;
     questions.forEach((q) => {
       if (answers[q.id] === q.correctIndex) correct++;
     });
 
-    // Scale score to 150 for official leaderboard format
-    const scaledScore = Math.round((correct / questions.length) * 150);
+    let scaledScore = Math.round((correct / questions.length) * 150);
+
+    try {
+      const idemKey = `sub_${serverAttemptId || examType}_${Object.keys(answers).length}`;
+      const res = await fetch('/api/exam', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': idemKey,
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          action: 'SUBMIT_ATTEMPT',
+          attemptId: serverAttemptId,
+          examType,
+          answers,
+          idempotencyKey: idemKey,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.result) {
+        toast.error(
+          data?.error || 'Exam submission verification failed. Please try again.'
+        );
+        return;
+      }
+      scaledScore = data.result.score;
+      setServerScore(data.result.score);
+      setServerCorrectCount(data.result.correct_count);
+    } catch {
+      toast.error(
+        'Network error while submitting exam. Please check your connection and try again.'
+      );
+      return;
+    }
+
     submitExamAttempt(examType, scaledScore, 150, answers);
     setShowSubmitModal(false);
     setStage('result');
@@ -112,11 +187,14 @@ function ExamPortalContent() {
 
   const currentQuestion = questions[currentIdx] || questions[0];
 
-  const correctCount = questions.reduce(
-    (acc, q) => (answers[q.id] === q.correctIndex ? acc + 1 : acc),
-    0
-  );
-  const scaledTotalScore = Math.round((correctCount / questions.length) * 150);
+  const correctCount =
+    serverCorrectCount ??
+    questions.reduce(
+      (acc, q) => (answers[q.id] === q.correctIndex ? acc + 1 : acc),
+      0
+    );
+  const scaledTotalScore =
+    serverScore ?? Math.round((correctCount / questions.length) * 150);
 
   return (
     <section className="mx-auto max-w-6xl px-4 py-10 sm:px-6">

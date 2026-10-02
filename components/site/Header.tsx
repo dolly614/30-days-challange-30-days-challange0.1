@@ -17,6 +17,8 @@ import {
 import { BrandMark } from './BrandMark';
 import { PWAInstallButton } from './PWAInstallButton';
 import { useUyanixStore } from '@/lib/store';
+import { logout as googleLogout } from '@/lib/google-auth';
+import { testFirestoreConnection } from '@/lib/firebase';
 import { toast } from 'sonner';
 
 export function Header() {
@@ -28,6 +30,7 @@ export function Header() {
     darkMode,
     toggleDarkMode,
     logout,
+    syncServerSession,
     notifications,
     markAllNotificationsRead,
   } = useUyanixStore();
@@ -38,7 +41,9 @@ export function Header() {
 
   useEffect(() => {
     useUyanixStore.persist.rehydrate();
-  }, []);
+    syncServerSession();
+    testFirestoreConnection();
+  }, [syncServerSession]);
 
   useEffect(() => {
     if (typeof document !== 'undefined') {
@@ -57,11 +62,13 @@ export function Header() {
     { href: '/sheets', label: 'Google Sheets' },
   ];
 
-  const handleConfirmLogout = () => {
-    logout();
+  const handleConfirmLogout = async () => {
+    await googleLogout().catch(() => {});
+    await logout();
     setShowLogoutConfirm(false);
     toast.success('Successfully logged out! Fir milenge Champion 👋');
     router.push('/login');
+    router.refresh();
   };
 
   return (

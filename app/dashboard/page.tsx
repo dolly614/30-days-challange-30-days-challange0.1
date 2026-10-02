@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -17,12 +17,25 @@ import { Header } from '@/components/site/Header';
 import { Footer } from '@/components/site/Footer';
 import { useUyanixStore } from '@/lib/store';
 import { getTopicsForClass } from '@/lib/curriculum';
+import { buildCanonicalWhatsAppShareUrl } from '@/lib/seo-canonical-url-governance';
 import { toast } from 'sonner';
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { currentUser, completedDays, leaderboard, updateProfile } = useUyanixStore();
+  const { currentUser, completedDays, leaderboard, updateProfile, syncServerSession } = useUyanixStore();
   const [chapterSearch, setChapterSearch] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    syncServerSession().then((serverUser) => {
+      if (active && !serverUser) {
+        router.replace('/login?redirect=/dashboard');
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [syncServerSession, router]);
 
   const userClass = currentUser?.classNum || 12;
   const userName = currentUser?.name || 'dollysingh';
@@ -255,9 +268,7 @@ export default function DashboardPage() {
             </button>
 
             <a
-              href={`https://wa.me/?text=${encodeURIComponent(
-                `I completed Day ${completedCount} of Uyanix 30 Days Challenge! 🎉 Join me: https://preview--seekho-jeet-compete.lovable.app`
-              )}`}
+              href={buildCanonicalWhatsAppShareUrl(completedCount)}
               target="_blank"
               rel="noreferrer"
               className="flex w-full items-center justify-center gap-2 rounded-2xl bg-secondary p-4 text-sm font-semibold text-secondary-foreground transition hover:opacity-90"

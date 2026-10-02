@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -25,6 +25,7 @@ import { QRCodeSVG } from 'qrcode.react';
 import { Header } from '@/components/site/Header';
 import { Footer } from '@/components/site/Footer';
 import { useUyanixStore } from '@/lib/store';
+import { buildCanonicalTeacherReferralUrl } from '@/lib/seo-canonical-url-governance';
 import { toast } from 'sonner';
 
 export default function TeacherPortalPage() {
@@ -37,7 +38,23 @@ export default function TeacherPortalPage() {
     requestWithdrawal,
     submitTeacherKyc,
     simulateTeacherReferral,
+    syncServerSession,
   } = useUyanixStore();
+
+  useEffect(() => {
+    let active = true;
+    syncServerSession().then((serverUser) => {
+      if (!active) return;
+      if (!serverUser) {
+        router.replace('/login?redirect=/teacher');
+      } else if (serverUser.role !== 'teacher' && serverUser.role !== 'admin') {
+        router.replace('/dashboard?error=teacher_only');
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [syncServerSession, router]);
 
   const teacher = teachers[0];
   const [payoutMethod, setPayoutMethod] = useState<'UPI' | 'Bank'>('UPI');
@@ -48,9 +65,9 @@ export default function TeacherPortalPage() {
   const [showKycModal, setShowKycModal] = useState(false);
   const [panInput, setPanInput] = useState(teacher?.kycPan || 'ABCDE1234F');
 
-  const referralUrl = `https://preview--seekho-jeet-compete.lovable.app/register?ref=${
+  const referralUrl = buildCanonicalTeacherReferralUrl(
     teacher?.code || 'DOLLOXW0'
-  }`;
+  );
 
   const conversionRate =
     teacher && teacher.referredCount > 0
@@ -82,7 +99,7 @@ export default function TeacherPortalPage() {
     e.preventDefault();
     submitTeacherKyc(panInput, destination);
     setShowKycModal(false);
-    toast.success('Teacher KYC Verified & Status Approved! 🎉');
+    toast.success('Teacher KYC submitted for Admin verification!');
   };
 
   const handleDownloadInvoice = (invoiceId: string, amt: number, date: string) => {
@@ -139,7 +156,9 @@ export default function TeacherPortalPage() {
               type="button"
               onClick={() => {
                 simulateTeacherReferral();
-                toast.success('New verified student referral credited (+₹250 demo bonus)! 🎉');
+                toast.error(
+                  'Demo referral simulation is disabled in production. Referrals are credited from verified student registrations.'
+                );
               }}
               className="inline-flex h-10 items-center gap-1.5 rounded-full bg-secondary/15 px-4 text-xs font-semibold text-secondary transition hover:bg-secondary/25"
             >

@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { ArrowLeft, Plus, Trash2, HelpCircle } from 'lucide-react';
 import { Header } from '@/components/site/Header';
 import { Footer } from '@/components/site/Footer';
@@ -9,12 +10,29 @@ import { useUyanixStore } from '@/lib/store';
 import { toast } from 'sonner';
 
 export default function AdminExamsManagerPage() {
+  const router = useRouter();
   const {
     customExamQuestions,
     examAttempts,
     addCustomExamQuestion,
     deleteCustomExamQuestion,
+    syncServerSession,
   } = useUyanixStore();
+
+  useEffect(() => {
+    let active = true;
+    syncServerSession().then((serverUser) => {
+      if (!active) return;
+      if (!serverUser) {
+        router.replace('/login?redirect=/admin/exams');
+      } else if (serverUser.role !== 'admin') {
+        router.replace('/dashboard?error=admin_only');
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [syncServerSession, router]);
 
   const [question, setQuestion] = useState('');
   const [optA, setOptA] = useState('');

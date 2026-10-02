@@ -1,13 +1,6 @@
 import type { MetadataRoute } from 'next';
+import { generateAuthoritativeRobotsRules } from '@/lib/seo-canonical-url-governance';
 
 export default function robots(): MetadataRoute.Robots {
-  const baseUrl = process.env.APP_URL || 'https://uyanix.in';
-  return {
-    rules: {
-      userAgent: '*',
-      allow: '/',
-      disallow: ['/api/', '/admin/'],
-    },
-    sitemap: `${baseUrl}/sitemap.xml`,
-  };
+  return generateAuthoritativeRobotsRules();
 }

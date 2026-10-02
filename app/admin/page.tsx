@@ -1,7 +1,9 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect } from 'react';
+import dynamic from 'next/dynamic';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   FileText,
   Users,
@@ -13,20 +15,84 @@ import {
 } from 'lucide-react';
 import { Header } from '@/components/site/Header';
 import { Footer } from '@/components/site/Footer';
-import { BulkImport } from '@/components/admin/BulkImport';
-import { ChaptersManager } from '@/components/admin/ChaptersManager';
-import { StudentVerifications } from '@/components/admin/StudentVerifications';
-import { TeachersPanel } from '@/components/admin/TeachersPanel';
-import { BrandPanel } from '@/components/admin/BrandPanel';
-import { AdminExtendedPanels } from '@/components/admin/AdminExtendedPanels';
-import { GoogleSheetsHub } from '@/components/sheets/GoogleSheetsHub';
 import { useUyanixStore } from '@/lib/store';
 import { toast } from 'sonner';
 
-export default function AdminDashboardPage() {
-  const { leaderboard, markPrizePaid } = useUyanixStore();
+const BulkImport = dynamic(() =>
+  import('@/components/admin/BulkImport').then((mod) => mod.BulkImport)
+);
+const ChaptersManager = dynamic(() =>
+  import('@/components/admin/ChaptersManager').then((mod) => mod.ChaptersManager)
+);
+const StudentVerifications = dynamic(() =>
+  import('@/components/admin/StudentVerifications').then(
+    (mod) => mod.StudentVerifications
+  )
+);
+const TeachersPanel = dynamic(() =>
+  import('@/components/admin/TeachersPanel').then((mod) => mod.TeachersPanel)
+);
+const BrandPanel = dynamic(() =>
+  import('@/components/admin/BrandPanel').then((mod) => mod.BrandPanel)
+);
+const AdminExtendedPanels = dynamic(() =>
+  import('@/components/admin/AdminExtendedPanels').then(
+    (mod) => mod.AdminExtendedPanels
+  )
+);
+const GoogleSheetsHub = dynamic(() =>
+  import('@/components/sheets/GoogleSheetsHub').then(
+    (mod) => mod.GoogleSheetsHub
+  )
+);
 
-  const handleExportCsv = () => {
+export default function AdminDashboardPage() {
+  const router = useRouter();
+  const { leaderboard, payments, examAttempts, markPrizePaid, syncServerSession } = useUyanixStore();
+
+  useEffect(() => {
+    let active = true;
+    syncServerSession().then((serverUser) => {
+      if (!active) return;
+      if (!serverUser) {
+        router.replace('/login?redirect=/admin');
+      } else if (serverUser.role !== 'admin') {
+        router.replace('/dashboard?error=admin_only');
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [syncServerSession, router]);
+
+  const totalRegistrationsCount = leaderboard.length;
+  const totalRevenueInr = payments
+    .filter((p) => p.status === 'captured')
+    .reduce((sum, p) => sum + p.amount, 0);
+  const totalExamsCompletedCount = Math.max(leaderboard.length, examAttempts.length);
+
+  const handleExportCsv = async () => {
+    try {
+      const res = await fetch('/api/admin/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          action: 'EXPORT_ADMIN_DATA',
+          exportType: 'LEADERBOARD',
+          requestedColumns: ['rank', 'name', 'classNum', 'city', 'score', 'total', 'prizePaid'],
+          rows: leaderboard.slice(0, 100),
+        }),
+      });
+      if (!res.ok) {
+        toast.error('Export authorization failed.');
+        return;
+      }
+    } catch {
+      toast.error('Export verification failed.');
+      return;
+    }
+
     const headers = ['Rank,Name,Class,City,Score,PrizePaid'];
     const rows = leaderboard.map(
       (s) =>
@@ -80,7 +146,9 @@ export default function AdminDashboardPage() {
             <div className="mt-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Total Registrations
             </div>
-            <div className="mt-1 text-2xl font-extrabold tabular-nums">12,847</div>
+            <div className="mt-1 text-2xl font-extrabold tabular-nums">
+              {totalRegistrationsCount.toLocaleString('en-IN')}
+            </div>
           </div>
 
           <div className="rounded-3xl border border-border bg-card p-5 shadow-card">
@@ -91,7 +159,7 @@ export default function AdminDashboardPage() {
               Total Revenue
             </div>
             <div className="mt-1 text-2xl font-extrabold tabular-nums">
-              ₹12,71,853
+              ₹{totalRevenueInr.toLocaleString('en-IN')}
             </div>
           </div>
 
@@ -102,7 +170,9 @@ export default function AdminDashboardPage() {
             <div className="mt-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Exams Completed
             </div>
-            <div className="mt-1 text-2xl font-extrabold tabular-nums">9,432</div>
+            <div className="mt-1 text-2xl font-extrabold tabular-nums">
+              {totalExamsCompletedCount.toLocaleString('en-IN')}
+            </div>
           </div>
 
           <div className="rounded-3xl border border-border bg-card p-5 shadow-card">

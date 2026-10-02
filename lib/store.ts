@@ -3,6 +3,25 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { EXAM_QUESTIONS_POOL, MCQQuestion } from './curriculum';
+import {
+  beginAuthOrNavigationRequest,
+  invalidateInFlightNavigationOnAuthBoundary,
+  shouldAcceptAsyncNavigationResponse,
+} from './routing-access-control-governance';
+
+function generateCryptographicOpaqueRecordId(
+  prefix: 'TKT' | 'WD' | 'VER' | 'PAY' | 'ATT' | 'REF' | 'CERT' | 'AUD' | 'NOTIF'
+): string {
+  const bytes = new Uint8Array(8);
+  if (typeof globalThis.crypto !== 'undefined' && globalThis.crypto.getRandomValues) {
+    globalThis.crypto.getRandomValues(bytes);
+  }
+  const hex = Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+    .toUpperCase();
+  return `${prefix}-UYX-${hex}`;
+}
 
 export interface StudentLeader {
   id: string;
@@ -137,6 +156,7 @@ export interface SavedChapterOverride {
 interface UyanixState {
   currentUser: UserProfile | null;
   isAuthenticated: boolean;
+  authChecked: boolean;
   darkMode: boolean;
   brandLogo: string;
   completedDays: number[];
@@ -156,9 +176,10 @@ interface UyanixState {
   auditLogs: AuditLogItem[];
 
   // Actions
-  login: (user: Partial<UserProfile>) => void;
-  logout: () => void;
-  updateProfile: (updates: Partial<UserProfile>) => void;
+  syncServerSession: () => Promise<UserProfile | null>;
+  login: (user: UserProfile) => void;
+  logout: () => Promise<void>;
+  updateProfile: (updates: Partial<UserProfile>) => Promise<boolean>;
   toggleDarkMode: () => void;
   setBrandLogo: (url: string) => void;
   resetBrandLogo: () => void;
@@ -217,24 +238,56 @@ const INITIAL_DAILY_SIGNUPS = [
   '11', '12', '13', '14', '15', '16', '17', '18', '19', '20', '21', '22', '23', '24',
 ].map((dayLabel) => ({ dayLabel, count: 0 }));
 
+async function verifyServerAdminAction(
+  action: string,
+  payload: Record<string, unknown>,
+  onUnauthorized: () => void
+): Promise<boolean> {
+  try {
+    const res = await fetch('/api/admin/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ action, ...payload }),
+    });
+    if (res.status === 401 || res.status === 403) {
+      onUnauthorized();
+      return false;
+    }
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function verifyServerTeacherAction(
+  action: string,
+  payload: Record<string, unknown>,
+  onUnauthorized: () => void
+): Promise<boolean> {
+  try {
+    const res = await fetch('/api/teacher/action', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ action, ...payload }),
+    });
+    if (res.status === 401 || res.status === 403) {
+      onUnauthorized();
+      return false;
+    }
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export const useUyanixStore = create<UyanixState>()(
   persist(
     (set, get) => ({
-      currentUser: {
-        id: 'user-dolly-1',
-        name: 'dollysingh',
-        teacherShortName: 'dolly',
-        email: 'dollysingh1268@gmail.com',
-        phone: '9000012345',
-        classNum: 12,
-        school: 'Delhi Public School, Jaipur',
-        city: 'Jaipur',
-        role: 'admin',
-        idVerified: true,
-        streakReminders: true,
-        createdAt: '2026-09-01T10:00:00Z',
-      },
-      isAuthenticated: true,
+      currentUser: null,
+      isAuthenticated: false,
+      authChecked: false,
       darkMode: false,
       brandLogo: DEFAULT_LOGO,
       completedDays: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
@@ -306,7 +359,7 @@ export const useUyanixStore = create<UyanixState>()(
         {
           id: 'notif-1',
           title: '🔥 15-Day Streak Completed!',
-          body: 'Badhai ho dollysingh! Aapka 15-Day Mid Exam ab unlock ho chuka hai.',
+          body: 'Badhai ho! Aapka 15-Day Mid Exam ab unlock ho chuka hai.',
           read: false,
           createdAt: 'Just now',
         },
@@ -321,67 +374,210 @@ export const useUyanixStore = create<UyanixState>()(
       auditLogs: [
         {
           id: 'aud-1',
-          actor: 'dollysingh1268@gmail.com',
+          actor: 'system',
           action: 'SYSTEM_INIT',
           target: 'Uyanix 30 Days Batch #4',
           timestamp: '2026-09-27 08:00',
         },
       ],
 
-      login: (userData) =>
-        set((state) => {
-          const updated: UserProfile = {
-            ...(state.currentUser || {
-              id: `user-${Date.now()}`,
-              name: 'dollysingh',
-              teacherShortName: 'dolly',
-              email: 'dollysingh1268@gmail.com',
-              phone: '9000012345',
-              classNum: 12,
-              school: 'Delhi Public School',
-              city: 'Jaipur',
-              role: 'student',
-              idVerified: true,
-              streakReminders: true,
-              createdAt: new Date().toISOString(),
-            }),
-            ...userData,
-          };
-          return {
-            currentUser: updated,
-            isAuthenticated: true,
-            auditLogs: [
-              {
-                id: `aud-${Date.now()}`,
-                actor: updated.email || updated.phone,
-                action: 'USER_LOGIN',
-                target: updated.name,
-                timestamp: new Date().toISOString().slice(0, 16).replace('T', ' '),
-              },
-              ...state.auditLogs,
-            ],
-          };
-        }),
+      syncServerSession: async () => {
+        const { requestEpoch } = beginAuthOrNavigationRequest(
+          get().currentUser?.id ?? null
+        );
+        try {
+          const res = await fetch('/api/auth/session', {
+            method: 'GET',
+            credentials: 'include',
+            cache: 'no-store',
+          });
+          const epochCheck = shouldAcceptAsyncNavigationResponse({
+            requestEpoch,
+          });
+          if (!epochCheck.accept) {
+            return get().currentUser;
+          }
+          if (!res.ok) {
+            invalidateInFlightNavigationOnAuthBoundary({
+              reason: 'SESSION_EXPIRED',
+              nextUserId: null,
+            });
+            set({
+              currentUser: null,
+              isAuthenticated: false,
+              authChecked: true,
+              examPaid: { mid: false, final: false },
+            });
+            return null;
+          }
+          const data = await res.json();
+          const postJsonEpochCheck = shouldAcceptAsyncNavigationResponse({
+            requestEpoch,
+            responseUserId: data?.user?.id ?? null,
+          });
+          if (!postJsonEpochCheck.accept) {
+            return get().currentUser;
+          }
+          if (data?.authenticated && data?.user) {
+            const incomingUser = data.user as UserProfile;
+            const prevUser = get().currentUser;
+            const isUserSwitch =
+              prevUser !== null && prevUser.id !== incomingUser.id;
+            if (isUserSwitch) {
+              invalidateInFlightNavigationOnAuthBoundary({
+                reason: 'USER_SWITCH',
+                nextUserId: incomingUser.id,
+              });
+            }
+            set((state) => ({
+              currentUser: incomingUser,
+              isAuthenticated: true,
+              authChecked: true,
+              examPaid: isUserSwitch
+                ? { mid: false, final: false }
+                : state.examPaid,
+            }));
+            return incomingUser;
+          }
+          set({
+            currentUser: null,
+            isAuthenticated: false,
+            authChecked: true,
+            examPaid: { mid: false, final: false },
+          });
+          return null;
+        } catch {
+          // Network error: fail-closed for authentication (never fabricate authorized state)
+          const fallbackCheck = shouldAcceptAsyncNavigationResponse({
+            requestEpoch,
+          });
+          if (fallbackCheck.accept) {
+            set({ currentUser: null, isAuthenticated: false, authChecked: true });
+          }
+          return null;
+        }
+      },
 
-      logout: () =>
+      login: (serverVerifiedUser) => {
+        const prevUser = get().currentUser;
+        const isUserSwitch =
+          prevUser !== null && prevUser.id !== serverVerifiedUser.id;
+        invalidateInFlightNavigationOnAuthBoundary({
+          reason: 'USER_SWITCH',
+          nextUserId: serverVerifiedUser.id,
+        });
+        if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+          try {
+            const bc = new BroadcastChannel('uyanix-auth-channel');
+            bc.postMessage({
+              type: 'LOGIN_OR_SWITCH',
+              userId: serverVerifiedUser.id,
+            });
+            bc.close();
+          } catch {
+            // ignore BroadcastChannel errors in restricted contexts
+          }
+        }
         set((state) => ({
-          isAuthenticated: false,
+          currentUser: serverVerifiedUser,
+          isAuthenticated: true,
+          authChecked: true,
+          examPaid: isUserSwitch
+            ? { mid: false, final: false }
+            : state.examPaid,
           auditLogs: [
             {
               id: `aud-${Date.now()}`,
-              actor: state.currentUser?.email || 'user',
-              action: 'USER_LOGOUT',
-              target: state.currentUser?.name || 'session',
+              actor: serverVerifiedUser.email || serverVerifiedUser.phone,
+              action: 'USER_LOGIN',
+              target: serverVerifiedUser.name,
               timestamp: new Date().toISOString().slice(0, 16).replace('T', ' '),
             },
             ...state.auditLogs,
           ],
-        })),
+        }));
+      },
 
-      updateProfile: (updates) =>
+      logout: async () => {
+        const actor = get().currentUser?.email || 'user';
+        const target = get().currentUser?.name || 'session';
+        // Immediately invalidate any in-flight navigation/session requests so stale responses cannot restore auth
+        invalidateInFlightNavigationOnAuthBoundary({
+          reason: 'LOGOUT',
+          nextUserId: null,
+        });
         set((state) => ({
-          currentUser: state.currentUser ? { ...state.currentUser, ...updates } : null,
-        })),
+          currentUser: null,
+          isAuthenticated: false,
+          authChecked: true,
+          examPaid: { mid: false, final: false },
+          auditLogs: [
+            {
+              id: `aud-${Date.now()}`,
+              actor,
+              action: 'USER_LOGOUT',
+              target,
+              timestamp: new Date().toISOString().slice(0, 16).replace('T', ' '),
+            },
+            ...state.auditLogs,
+          ],
+        }));
+        if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+          try {
+            const bc = new BroadcastChannel('uyanix-auth-channel');
+            bc.postMessage({ type: 'LOGOUT' });
+            bc.close();
+          } catch {
+            // ignore BroadcastChannel errors
+          }
+        }
+        try {
+          await fetch('/api/auth/logout', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ action: 'logout' }),
+          });
+        } catch {
+          // Local state is already cleared authoritatively
+        }
+      },
+
+      updateProfile: async (updates) => {
+        try {
+          // Strip any role or privilege fields before sending to server
+          const safeUpdates = { ...updates };
+          delete (safeUpdates as Partial<UserProfile>).role;
+          delete (safeUpdates as Partial<UserProfile>).id;
+          delete (safeUpdates as Partial<UserProfile>).idVerified;
+
+          const res = await fetch('/api/user/profile', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify(safeUpdates),
+          });
+          if (res.status === 401) {
+            set({ currentUser: null, isAuthenticated: false, authChecked: true });
+            return false;
+          }
+          if (!res.ok) {
+            return false;
+          }
+          const data = await res.json();
+          if (data?.user) {
+            set({
+              currentUser: data.user as UserProfile,
+              isAuthenticated: true,
+              authChecked: true,
+            });
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
+        }
+      },
 
       toggleDarkMode: () =>
         set((state) => {
@@ -392,8 +588,31 @@ export const useUyanixStore = create<UyanixState>()(
           return { darkMode: next };
         }),
 
-      setBrandLogo: (url) => set({ brandLogo: url }),
-      resetBrandLogo: () => set({ brandLogo: DEFAULT_LOGO }),
+      setBrandLogo: (url) => {
+        if (get().currentUser?.role !== 'admin') {
+          get().syncServerSession();
+          return;
+        }
+        set({ brandLogo: url });
+        verifyServerAdminAction(
+          'SET_BRAND_LOGO',
+          { target: 'brandLogo' },
+          () => get().syncServerSession()
+        );
+      },
+
+      resetBrandLogo: () => {
+        if (get().currentUser?.role !== 'admin') {
+          get().syncServerSession();
+          return;
+        }
+        set({ brandLogo: DEFAULT_LOGO });
+        verifyServerAdminAction(
+          'RESET_BRAND_LOGO',
+          { target: 'brandLogo' },
+          () => get().syncServerSession()
+        );
+      },
 
       completeDay: (day, score) =>
         set((state) => {
@@ -420,7 +639,11 @@ export const useUyanixStore = create<UyanixState>()(
           leaderboard: [...state.leaderboard].sort((a, b) => b.score - a.score || a.rank - b.rank),
         })),
 
-      markPrizePaid: (studentId) =>
+      markPrizePaid: (studentId) => {
+        if (get().currentUser?.role !== 'admin') {
+          get().syncServerSession();
+          return;
+        }
         set((state) => ({
           leaderboard: state.leaderboard.map((s) =>
             s.id === studentId ? { ...s, prizePaid: !s.prizePaid } : s
@@ -435,16 +658,38 @@ export const useUyanixStore = create<UyanixState>()(
             },
             ...state.auditLogs,
           ],
-        })),
+        }));
+        verifyServerAdminAction(
+          'MARK_PRIZE_PAID',
+          { target: studentId },
+          () => get().syncServerSession()
+        );
+      },
 
-      toggleBanStudent: (studentId) =>
+      toggleBanStudent: (studentId) => {
+        if (get().currentUser?.role !== 'admin') {
+          get().syncServerSession();
+          return;
+        }
+        const targetStudent = get().leaderboard.find((s) => s.id === studentId);
+        const nextBanned = targetStudent?.status !== 'banned';
         set((state) => ({
           leaderboard: state.leaderboard.map((s) =>
             s.id === studentId ? { ...s, status: s.status === 'banned' ? 'active' : 'banned' } : s
           ),
-        })),
+        }));
+        verifyServerAdminAction(
+          'TOGGLE_BAN_STUDENT',
+          { target: studentId, targetUserId: studentId, banned: nextBanned },
+          () => get().syncServerSession()
+        );
+      },
 
-      saveChapter: (classNum, day, title, content) =>
+      saveChapter: (classNum, day, title, content) => {
+        if (get().currentUser?.role !== 'admin') {
+          get().syncServerSession();
+          return;
+        }
         set((state) => {
           const key = `${classNum}-${day}`;
           return {
@@ -469,9 +714,19 @@ export const useUyanixStore = create<UyanixState>()(
               ...state.auditLogs,
             ],
           };
-        }),
+        });
+        verifyServerAdminAction(
+          'SAVE_CHAPTER',
+          { target: `Class ${classNum} Day ${day}: ${title}` },
+          () => get().syncServerSession()
+        );
+      },
 
       bulkSaveChapters: (classNum, days, overwrite) => {
+        if (get().currentUser?.role !== 'admin') {
+          get().syncServerSession();
+          return 0;
+        }
         let count = 0;
         set((state) => {
           const updated = { ...state.savedChapters };
@@ -490,10 +745,19 @@ export const useUyanixStore = create<UyanixState>()(
           }
           return { savedChapters: updated };
         });
+        verifyServerAdminAction(
+          'BULK_SAVE_CHAPTERS',
+          { target: `Class ${classNum} (${count} chapters)` },
+          () => get().syncServerSession()
+        );
         return count;
       },
 
-      deleteClassChapters: (classNum) =>
+      deleteClassChapters: (classNum) => {
+        if (get().currentUser?.role !== 'admin') {
+          get().syncServerSession();
+          return;
+        }
         set((state) => {
           const next = { ...state.savedChapters };
           Object.keys(next).forEach((k) => {
@@ -502,11 +766,32 @@ export const useUyanixStore = create<UyanixState>()(
             }
           });
           return { savedChapters: next };
-        }),
+        });
+        verifyServerAdminAction(
+          'DELETE_CLASS_CHAPTERS',
+          { target: `Class ${classNum}` },
+          () => get().syncServerSession()
+        );
+      },
 
-      resetAllChapters: () => set({ savedChapters: {} }),
+      resetAllChapters: () => {
+        if (get().currentUser?.role !== 'admin') {
+          get().syncServerSession();
+          return;
+        }
+        set({ savedChapters: {} });
+        verifyServerAdminAction(
+          'RESET_ALL_CHAPTERS',
+          { target: 'all_classes' },
+          () => get().syncServerSession()
+        );
+      },
 
-      updateTeacherStatus: (teacherId, status) =>
+      updateTeacherStatus: (teacherId, status) => {
+        if (get().currentUser?.role !== 'admin') {
+          get().syncServerSession();
+          return;
+        }
         set((state) => ({
           teachers: state.teachers.map((t) => (t.id === teacherId ? { ...t, status } : t)),
           auditLogs: [
@@ -519,15 +804,26 @@ export const useUyanixStore = create<UyanixState>()(
             },
             ...state.auditLogs,
           ],
-        })),
+        }));
+        verifyServerAdminAction(
+          'UPDATE_TEACHER_STATUS',
+          { target: `${teacherId}:${status}` },
+          () => get().syncServerSession()
+        );
+      },
 
       requestWithdrawal: (method, destination, amount) => {
         const state = get();
+        const role = state.currentUser?.role;
+        if (role !== 'teacher' && role !== 'admin') {
+          state.syncServerSession();
+          return false;
+        }
         const teacher = state.teachers[0];
         if (!teacher || teacher.balance < amount || amount < 500) return false;
 
         const newWithdrawal: WithdrawalRequest = {
-          id: `wd-${Date.now()}`,
+          id: generateCryptographicOpaqueRecordId('WD'),
           teacherId: teacher.id,
           teacherName: teacher.name,
           date: new Date().toISOString().slice(0, 10),
@@ -535,7 +831,7 @@ export const useUyanixStore = create<UyanixState>()(
           destination,
           amount,
           status: 'pending',
-          invoiceId: `INV-UYX-${Math.floor(100000 + Math.random() * 900000)}`,
+          invoiceId: generateCryptographicOpaqueRecordId('PAY'),
         };
 
         set({
@@ -544,10 +840,20 @@ export const useUyanixStore = create<UyanixState>()(
           ),
           withdrawals: [newWithdrawal, ...state.withdrawals],
         });
+
+        verifyServerTeacherAction(
+          'REQUEST_WITHDRAWAL',
+          { method, destination, amount },
+          () => get().syncServerSession()
+        );
         return true;
       },
 
-      processWithdrawal: (withdrawalId, status) =>
+      processWithdrawal: (withdrawalId, status) => {
+        if (get().currentUser?.role !== 'admin') {
+          get().syncServerSession();
+          return;
+        }
         set((state) => {
           const target = state.withdrawals.find((w) => w.id === withdrawalId);
           return {
@@ -561,63 +867,57 @@ export const useUyanixStore = create<UyanixState>()(
                   )
                 : state.teachers,
           };
-        }),
+        });
+        verifyServerAdminAction(
+          'PROCESS_WITHDRAWAL',
+          { target: `${withdrawalId}:${status}` },
+          () => get().syncServerSession()
+        );
+      },
 
-      submitTeacherKyc: (pan, upiId) =>
-        set((state) => ({
-          teachers: state.teachers.map((t, idx) =>
-            idx === 0 ? { ...t, kycPan: pan.toUpperCase(), upiId, kycVerified: true, status: 'approved' } : t
+      submitTeacherKyc: (pan, upiId) => {
+        const state = get();
+        const role = state.currentUser?.role;
+        if (role !== 'teacher' && role !== 'admin') {
+          state.syncServerSession();
+          return;
+        }
+        const isAdminActor = role === 'admin';
+        set((s) => ({
+          teachers: s.teachers.map((t, idx) =>
+            idx === 0
+              ? {
+                  ...t,
+                  kycPan: pan.toUpperCase(),
+                  upiId,
+                  kycVerified: isAdminActor ? true : t.kycVerified,
+                  status: isAdminActor ? 'approved' : 'pending',
+                }
+              : t
           ),
-        })),
+        }));
+        verifyServerTeacherAction(
+          'SUBMIT_KYC',
+          { pan: pan.toUpperCase(), upiId },
+          () => get().syncServerSession()
+        );
+      },
 
-      simulateTeacherReferral: () =>
-        set((state) => {
-          const names = ['Rohan Gupta', 'Priya Nair', 'Aditya Chauhan', 'Neha Kumari', 'Yashvardhan'];
-          const pick = names[Math.floor(Math.random() * names.length)];
-          const cls = Math.floor(Math.random() * 12) + 1;
-
-          const newRef: ReferralItem = {
-            id: `ref-${Date.now()}`,
-            teacherCode: 'DOLLOXW0',
-            studentName: pick,
-            studentClass: cls,
-            status: 'verified',
-            commission: 15,
-            date: 'Today',
-          };
-
-          return {
-            referrals: [newRef, ...state.referrals],
-            teachers: state.teachers.map((t, idx) => {
-              if (idx !== 0) return t;
-              const nextPaid = t.paidActiveCount + 1;
-              const commission = nextPaid > 200 ? 20 : nextPaid > 50 ? 15 : 10;
-              const addAmount = Math.max(commission, 250); // Add ₹250 in demo so teacher can test ₹500 withdrawal quickly
-              const nextTier =
-                nextPaid > 200
-                  ? 'Super Educator'
-                  : nextPaid >= 5
-                  ? 'Active Mentor'
-                  : 'Beginner Teacher';
-
-              const updatedSignups = t.dailySignups.map((d, i) =>
-                i === t.dailySignups.length - 1 ? { ...d, count: d.count + 1 } : d
-              );
-
-              return {
-                ...t,
-                status: 'approved',
-                referredCount: t.referredCount + 1,
-                paidActiveCount: nextPaid,
-                balance: t.balance + addAmount,
-                totalEarned: t.totalEarned + addAmount,
-                thisMonthEarned: t.thisMonthEarned + addAmount,
-                tier: nextTier,
-                dailySignups: updatedSignups,
-              };
-            }),
-          };
-        }),
+      simulateTeacherReferral: () => {
+        const state = get();
+        const role = state.currentUser?.role;
+        if (role !== 'teacher' && role !== 'admin') {
+          state.syncServerSession();
+          return;
+        }
+        // Client-side referral & balance simulation is disabled in production;
+        // referrals and commissions are derived solely from authoritative server events.
+        verifyServerTeacherAction(
+          'SIMULATE_REFERRAL',
+          {},
+          () => get().syncServerSession()
+        );
+      },
 
       submitStudentIdVerification: (docName) =>
         set((state) => {
@@ -632,15 +932,25 @@ export const useUyanixStore = create<UyanixState>()(
             status: 'pending',
           };
           return {
-            currentUser: user ? { ...user, idVerified: true, idCardName: docName } : null,
+            currentUser: user ? { ...user, idCardName: docName } : null,
             verifications: [item, ...state.verifications],
           };
         }),
 
-      handleVerification: (id, status) =>
+      handleVerification: (id, status) => {
+        if (get().currentUser?.role !== 'admin') {
+          get().syncServerSession();
+          return;
+        }
         set((state) => ({
           verifications: state.verifications.map((v) => (v.id === id ? { ...v, status } : v)),
-        })),
+        }));
+        verifyServerAdminAction(
+          'HANDLE_VERIFICATION',
+          { target: `${id}:${status}` },
+          () => get().syncServerSession()
+        );
+      },
 
       payForExam: (type, razorpayId) =>
         set((state) => ({
@@ -676,19 +986,44 @@ export const useUyanixStore = create<UyanixState>()(
         return attempt;
       },
 
-      refundPayment: (paymentId) =>
+      refundPayment: (paymentId) => {
+        if (get().currentUser?.role !== 'admin') {
+          get().syncServerSession();
+          return;
+        }
         set((state) => ({
           payments: state.payments.map((p) =>
             p.id === paymentId ? { ...p, status: 'refunded' } : p
           ),
-        })),
+        }));
+        verifyServerAdminAction(
+          'REFUND_PAYMENT',
+          { target: paymentId },
+          () => get().syncServerSession()
+        );
+      },
 
-      addCustomExamQuestion: (q) =>
+      addCustomExamQuestion: (q) => {
+        if (get().currentUser?.role !== 'admin') {
+          get().syncServerSession();
+          return;
+        }
         set((state) => ({
           customExamQuestions: [q, ...state.customExamQuestions],
-        })),
+        }));
+        verifyServerAdminAction(
+          'ADD_EXAM_QUESTION',
+          { target: q.id },
+          () => get().syncServerSession()
+        );
+      },
 
       bulkImportExamQuestions: (questions) => {
+        const role = get().currentUser?.role;
+        if (role !== 'admin' && role !== 'teacher') {
+          get().syncServerSession();
+          return 0;
+        }
         if (!questions.length) return 0;
         set((state) => ({
           customExamQuestions: [...questions, ...state.customExamQuestions],
@@ -703,15 +1038,37 @@ export const useUyanixStore = create<UyanixState>()(
             ...state.auditLogs,
           ],
         }));
+        if (role === 'admin') {
+          verifyServerAdminAction(
+            'BULK_IMPORT_EXAM_QUESTIONS',
+            { target: `${questions.length} Exam Questions` },
+            () => get().syncServerSession()
+          );
+        }
         return questions.length;
       },
 
-      deleteCustomExamQuestion: (id) =>
+      deleteCustomExamQuestion: (id) => {
+        if (get().currentUser?.role !== 'admin') {
+          get().syncServerSession();
+          return;
+        }
         set((state) => ({
           customExamQuestions: state.customExamQuestions.filter((q) => q.id !== id),
-        })),
+        }));
+        verifyServerAdminAction(
+          'DELETE_EXAM_QUESTION',
+          { target: id },
+          () => get().syncServerSession()
+        );
+      },
 
-      importLeaderboardFromSheet: (students) =>
+      importLeaderboardFromSheet: (students) => {
+        const role = get().currentUser?.role;
+        if (role !== 'admin' && role !== 'teacher') {
+          get().syncServerSession();
+          return;
+        }
         set((state) => ({
           leaderboard: students.map((s, idx) => ({
             ...s,
@@ -727,14 +1084,26 @@ export const useUyanixStore = create<UyanixState>()(
             },
             ...state.auditLogs,
           ],
-        })),
+        }));
+        if (role === 'admin') {
+          verifyServerAdminAction(
+            'IMPORT_LEADERBOARD',
+            { target: `${students.length} Leaderboard Records` },
+            () => get().syncServerSession()
+          );
+        }
+      },
 
       markAllNotificationsRead: () =>
         set((state) => ({
           notifications: state.notifications.map((n) => ({ ...n, read: true })),
         })),
 
-      broadcastNotification: (title, body) =>
+      broadcastNotification: (title, body) => {
+        if (get().currentUser?.role !== 'admin') {
+          get().syncServerSession();
+          return;
+        }
         set((state) => ({
           notifications: [
             {
@@ -746,11 +1115,54 @@ export const useUyanixStore = create<UyanixState>()(
             },
             ...state.notifications,
           ],
-        })),
+        }));
+        verifyServerAdminAction(
+          'BROADCAST_NOTIFICATION',
+          { target: title },
+          () => get().syncServerSession()
+        );
+      },
     }),
     {
       name: 'uyanix-30days-storage-v1',
       skipHydration: true,
+      partialize: (state) => ({
+        darkMode: state.darkMode,
+        brandLogo: state.brandLogo,
+        completedDays: state.completedDays,
+        dailyScores: state.dailyScores,
+        leaderboard: state.leaderboard,
+        teachers: state.teachers,
+        referrals: state.referrals,
+        withdrawals: state.withdrawals,
+        fraudLogs: state.fraudLogs,
+        verifications: state.verifications,
+        savedChapters: state.savedChapters,
+        examAttempts: state.examAttempts,
+        notifications: state.notifications,
+      }),
+      merge: (persistedState, currentState) => {
+        const safePersisted = { ...(persistedState as Partial<UyanixState>) };
+        // Never trust authentication, role, identity, payment entitlement, audit logs, or answer keys from browser storage
+        delete safePersisted.currentUser;
+        delete safePersisted.isAuthenticated;
+        delete safePersisted.authChecked;
+        delete safePersisted.customExamQuestions;
+        delete safePersisted.examPaid;
+        delete safePersisted.payments;
+        delete safePersisted.auditLogs;
+        return {
+          ...currentState,
+          ...safePersisted,
+          currentUser: currentState.currentUser,
+          isAuthenticated: currentState.isAuthenticated,
+          authChecked: currentState.authChecked,
+          customExamQuestions: currentState.customExamQuestions,
+          examPaid: currentState.examPaid,
+          payments: currentState.payments,
+          auditLogs: currentState.auditLogs,
+        };
+      },
     }
   )
 );

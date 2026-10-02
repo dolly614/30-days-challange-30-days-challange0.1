@@ -1,22 +1,56 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { Award, Download, Printer, Share2, ShieldCheck } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import { Header } from '@/components/site/Header';
 import { Footer } from '@/components/site/Footer';
 import { BrandMark } from '@/components/site/BrandMark';
 import { useUyanixStore } from '@/lib/store';
+import { buildCanonicalCertificatePublicVerificationUrl } from '@/lib/seo-canonical-url-governance';
 import { toast } from 'sonner';
 
 export default function CertificatePage() {
-  const { currentUser, completedDays, examAttempts } = useUyanixStore();
+  const router = useRouter();
+  const { currentUser, completedDays, examAttempts, syncServerSession } = useUyanixStore();
   const [customName, setCustomName] = useState(currentUser?.name || 'dollysingh');
 
+  useEffect(() => {
+    let active = true;
+    syncServerSession().then((serverUser) => {
+      if (active && !serverUser) {
+        router.replace('/login?redirect=/certificate');
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [syncServerSession, router]);
+
   const latestAttempt = examAttempts[0];
-  const certId = `UYX-2026-C${currentUser?.classNum || 12}-${(currentUser?.id || '7781')
-    .slice(-4)
-    .toUpperCase()}`;
+  const [serverCertId, setServerCertId] = useState<string>('UYX-CERT-A9F48E2C1B7D03E6');
+  const [serverQrUrl, setServerQrUrl] = useState<string>(
+    buildCanonicalCertificatePublicVerificationUrl('UYX-CERT-A9F48E2C1B7D03E6')
+  );
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/certificate', { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (active && data?.publicCertificateId && data?.qrVerificationUrl) {
+          setServerCertId(data.publicCertificateId);
+          setServerQrUrl(data.qrVerificationUrl);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const certId = serverCertId;
 
   const handlePrintPdf = () => {
     toast.success('Opening Certificate PDF Print Dialog...');
@@ -52,7 +86,7 @@ export default function CertificatePage() {
             <button
               type="button"
               onClick={() => {
-                navigator.clipboard.writeText(window.location.href);
+                navigator.clipboard.writeText(serverQrUrl);
                 toast.success('Certificate verification link copied!');
               }}
               className="inline-flex h-11 items-center gap-2 rounded-full border border-border bg-card px-4 text-xs font-semibold hover:bg-accent"
@@ -128,7 +162,7 @@ export default function CertificatePage() {
               <div className="flex flex-col items-center">
                 <div className="rounded-xl border border-border bg-white p-2 shadow-sm">
                   <QRCodeSVG
-                    value={`https://preview--seekho-jeet-compete.lovable.app/certificate?id=${certId}`}
+                    value={serverQrUrl}
                     size={68}
                   />
                 </div>

@@ -271,11 +271,8 @@ export function GoogleSheetsHub() {
       if (result) {
         setGoogleUser(result.user);
         setNeedsAuth(false);
-        if (result.user.email || result.user.displayName) {
-          login({
-            name: result.user.displayName || 'dollysingh',
-            email: result.user.email || 'dollysingh1268@gmail.com',
-          });
+        if (result.serverUser) {
+          login(result.serverUser);
         }
         toast.success(
           `Connected to Google Workspace as ${

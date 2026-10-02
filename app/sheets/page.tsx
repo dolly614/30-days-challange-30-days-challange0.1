@@ -1,13 +1,32 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { ArrowLeft, FileSpreadsheet } from 'lucide-react';
 import { Header } from '@/components/site/Header';
 import { Footer } from '@/components/site/Footer';
 import { GoogleSheetsHub } from '@/components/sheets/GoogleSheetsHub';
+import { useUyanixStore } from '@/lib/store';
 
 export default function GoogleSheetsPage() {
+  const router = useRouter();
+  const { syncServerSession } = useUyanixStore();
+
+  useEffect(() => {
+    let active = true;
+    syncServerSession().then((serverUser) => {
+      if (!active) return;
+      if (!serverUser) {
+        router.replace('/login?redirect=/sheets');
+      } else if (serverUser.role !== 'admin' && serverUser.role !== 'teacher') {
+        router.replace('/dashboard?error=forbidden');
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [syncServerSession, router]);
   return (
     <div className="min-h-screen bg-background">
       <Header />

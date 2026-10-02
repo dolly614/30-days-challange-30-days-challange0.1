@@ -9,6 +9,7 @@ import {
   User,
 } from 'firebase/auth';
 import firebaseConfig from '../firebase-applet-config.json';
+import type { UserProfile } from './store';
 
 export const SCOPES = [
   'https://www.googleapis.com/auth/drive',
@@ -62,6 +63,7 @@ export const initAuth = (
 export const googleSignIn = async (): Promise<{
   user: User;
   accessToken: string;
+  serverUser: UserProfile;
 } | null> => {
   try {
     isSigningIn = true;
@@ -72,8 +74,26 @@ export const googleSignIn = async (): Promise<{
       throw new Error('Failed to get access token from Firebase Auth');
     }
 
+    // Obtain Firebase ID token and verify it server-side to establish HttpOnly session
+    const idToken = await result.user.getIdToken();
+    const sessionRes = await fetch('/api/auth/google', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idToken }),
+    });
+    const sessionData = await sessionRes.json();
+    if (!sessionRes.ok || !sessionData.user) {
+      throw new Error(
+        sessionData.error || 'Server failed to verify Google authentication token.'
+      );
+    }
+
     cachedAccessToken = credential.accessToken;
-    return { user: result.user, accessToken: cachedAccessToken };
+    return {
+      user: result.user,
+      accessToken: cachedAccessToken,
+      serverUser: sessionData.user as UserProfile,
+    };
   } catch (error: unknown) {
     console.error('Sign in error:', error);
     throw error;

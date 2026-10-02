@@ -10,15 +10,16 @@ import { BrandMark } from '@/components/site/BrandMark';
 import { GoogleSignInButton } from '@/components/site/GoogleSignInButton';
 import { googleSignIn } from '@/lib/google-auth';
 import { useUyanixStore } from '@/lib/store';
+import { validateSafeInternalRedirect } from '@/lib/seo-canonical-url-governance';
 import { toast } from 'sonner';
 
 export default function LoginPage() {
   const router = useRouter();
-  const { login } = useUyanixStore();
+  const { login, syncServerSession } = useUyanixStore();
 
   const [mode, setMode] = useState<'password' | 'otp' | 'forgot'>('password');
-  const [identifier, setIdentifier] = useState('dollysingh1268@gmail.com');
-  const [password, setPassword] = useState('uyanix123');
+  const [identifier, setIdentifier] = useState('');
+  const [password, setPassword] = useState('');
   const [otpSent, setOtpSent] = useState(false);
   const [otpCode, setOtpCode] = useState('');
   const [resetSent, setResetSent] = useState(false);
@@ -28,14 +29,11 @@ export default function LoginPage() {
     setGoogleLoading(true);
     try {
       const res = await googleSignIn();
-      if (res?.user) {
-        login({
-          name: res.user.displayName || res.user.email?.split('@')[0] || 'dollysingh',
-          email: res.user.email || 'dollysingh1268@gmail.com',
-          avatar: res.user.photoURL || undefined,
-        });
+      if (res?.user && res?.serverUser) {
+        login(res.serverUser);
         toast.success('Signed in with Google Workspace & Sheets access! 🚀');
-        router.push('/sheets');
+        router.push(res.serverUser.role === 'admin' ? '/admin' : '/dashboard');
+        router.refresh();
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Google Sign-In failed';
@@ -45,40 +43,133 @@ export default function LoginPage() {
     }
   };
 
-  const handlePasswordLogin = (e: React.FormEvent) => {
+  const handlePasswordLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    login({
-      name: identifier.includes('@') ? identifier.split('@')[0] : 'dollysingh',
-      email: identifier.includes('@') ? identifier : 'dollysingh1268@gmail.com',
-      phone: identifier.includes('@') ? '9000012345' : identifier,
-    });
-    toast.success('Welcome back to Uyanix 30 Days Challenge! 🚀');
-    router.push('/dashboard');
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ identifier, password }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.user) {
+        toast.error(data.error || 'Invalid email/mobile or password.');
+        return;
+      }
+      const authoritativeUser = (await syncServerSession()) || data.user;
+      login(authoritativeUser);
+      setPassword('');
+      toast.success('Welcome back to Uyanix 30 Days Challenge! 🚀');
+      const params = new URLSearchParams(window.location.search);
+      const rawRedirect = params.get('redirect') || '/dashboard';
+      const redirectValidation = validateSafeInternalRedirect(
+        rawRedirect,
+        '/dashboard'
+      );
+      const redirectTo = redirectValidation.ok
+        ? redirectValidation.safeRedirectPath
+        : redirectValidation.safeFallbackPath;
+      router.push(redirectTo);
+      router.refresh();
+    } catch {
+      toast.error('Authentication failed. Please try again.');
+    }
   };
 
-  const handleOtpSubmit = (e: React.FormEvent) => {
+  const handleOtpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!otpSent) {
-      setOtpSent(true);
-      toast.success('6-digit OTP aapke mobile number par bhej diya gaya hai! (Demo OTP: 123456)');
-      return;
+    try {
+      const targetPhone = identifier.replace(/\D/g, '') || '9000012345';
+      if (!otpSent) {
+        const res = await fetch('/api/auth/otp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ action: 'send', phone: targetPhone }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          toast.error(data.error || 'Unable to send OTP.');
+          return;
+        }
+        setOtpSent(true);
+        toast.success(
+          '6-digit OTP aapke registered mobile number par bhej diya gaya hai!'
+        );
+        return;
+      }
+
+      const trimmedOtp = otpCode.trim();
+      if (!/^\d{6}$/.test(trimmedOtp)) {
+        toast.error('Valid 6-digit OTP enter karein.');
+        return;
+      }
+
+      const verifyRes = await fetch('/api/auth/otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          action: 'verify',
+          phone: targetPhone,
+          otpCode: trimmedOtp,
+        }),
+      });
+      const verifyData = await verifyRes.json();
+      if (!verifyRes.ok || !verifyData.user) {
+        toast.error(verifyData.error || 'Invalid or expired OTP.');
+        return;
+      }
+
+      const authoritativeUser = (await syncServerSession()) || verifyData.user;
+      login(authoritativeUser);
+      setOtpCode('');
+      toast.success('Mobile OTP Verified! Redirecting to Dashboard...');
+      router.push('/dashboard');
+      router.refresh();
+    } catch {
+      toast.error('OTP verification failed. Please try again.');
     }
-    if (otpCode.length < 4) {
-      toast.error('Valid OTP enter karein (e.g. 123456)');
-      return;
-    }
-    login({
-      name: 'dollysingh',
-      phone: identifier,
-    });
-    toast.success('Mobile OTP Verified! Redirecting to Dashboard...');
-    router.push('/dashboard');
   };
 
-  const handleForgotSubmit = (e: React.FormEvent) => {
+  const handleForgotSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setResetSent(true);
-    toast.success('Password reset link aapke email/SMS par bhej diya gaya hai!');
+    try {
+      const res = await fetch('/api/auth/forgot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || 'Unable to send password reset link.');
+        return;
+      }
+      setResetSent(true);
+      toast.success('Password reset link aapke email/SMS par bhej diya gaya hai!');
+    } catch {
+      toast.error('Unable to process password reset request.');
+    }
+  };
+
+  const handleDemoAttempt = async (requestedRole: 'student' | 'teacher' | 'admin') => {
+    try {
+      const res = await fetch('/api/auth/demo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: requestedRole }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(
+          data.error ||
+            'Quick Demo login is disabled. Please sign in with your registered credentials or Google account.'
+        );
+      }
+    } catch {
+      toast.error('Demo login is disabled.');
+    }
   };
 
   return (
@@ -267,33 +358,21 @@ export default function LoginPage() {
             <div className="mt-2.5 grid grid-cols-3 gap-2">
               <button
                 type="button"
-                onClick={() => {
-                  login({ name: 'dollysingh', role: 'student', classNum: 12 });
-                  toast.success('Logged in as Student (dollysingh)');
-                  router.push('/dashboard');
-                }}
+                onClick={() => handleDemoAttempt('student')}
                 className="rounded-xl border border-border bg-muted/40 py-2 text-xs font-semibold hover:bg-accent"
               >
                 🎓 Student
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  login({ name: 'dollysingh', teacherShortName: 'dolly', role: 'teacher' });
-                  toast.success('Logged in as Teacher (dolly)');
-                  router.push('/teacher');
-                }}
+                onClick={() => handleDemoAttempt('teacher')}
                 className="rounded-xl border border-border bg-muted/40 py-2 text-xs font-semibold hover:bg-accent"
               >
                 👩‍🏫 Teacher
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  login({ name: 'dollysingh', role: 'admin' });
-                  toast.success('Logged in as Super Admin');
-                  router.push('/admin');
-                }}
+                onClick={() => handleDemoAttempt('admin')}
                 className="rounded-xl border border-border bg-muted/40 py-2 text-xs font-semibold hover:bg-accent"
               >
                 🛡️ Admin

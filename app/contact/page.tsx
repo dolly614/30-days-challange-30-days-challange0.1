@@ -12,12 +12,35 @@ export default function ContactSupportPage() {
   const [issueType, setIssueType] = useState('Exam / Quiz Help');
   const [message, setMessage] = useState('');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    toast.success('Support ticket submitted! Hamari team 2 ghante mein reply karegi 🚀');
-    setName('');
-    setEmail('');
-    setMessage('');
+    try {
+      const res = await fetch('/api/health', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          action: 'CREATE_SUPPORT_TICKET',
+          name,
+          contactEmailOrPhone: email,
+          issueType,
+          message,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.ticket?.ticketId) {
+        toast.error(data?.error || 'Unable to submit support ticket. Please try again.');
+        return;
+      }
+      toast.success(
+        `Support ticket (${data.ticket.ticketId}) submitted! Hamari team 2 ghante mein reply karegi 🚀`
+      );
+      setName('');
+      setEmail('');
+      setMessage('');
+    } catch {
+      toast.error('Network error while submitting support ticket. Please try again.');
+    }
   };
 
   return (
