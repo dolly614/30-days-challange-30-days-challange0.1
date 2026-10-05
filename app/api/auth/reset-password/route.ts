@@ -164,7 +164,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const result = consumePasswordResetToken({
+    const result = await consumePasswordResetToken({
       token,
       newPassword,
       confirmPassword,
@@ -180,7 +180,7 @@ export async function POST(req: NextRequest) {
     // Revoke any existing session cookie on this browser & require clean login with new password
     const existingToken = extractSessionTokenFromRequest(req);
     if (existingToken) {
-      revokeSessionToken(existingToken);
+      await revokeSessionToken(existingToken);
     }
 
     const res = NextResponse.json({

@@ -1,3 +1,4 @@
+import { env } from '@/lib/env';
 import type { Metadata, Viewport } from 'next';
 import { Plus_Jakarta_Sans, Fraunces, JetBrains_Mono } from 'next/font/google';
 import { Toaster } from 'sonner';

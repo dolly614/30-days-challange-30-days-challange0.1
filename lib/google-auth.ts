@@ -1,14 +1,12 @@
 'use client';
 
-import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
-  getAuth,
   signInWithPopup,
   GoogleAuthProvider,
   onAuthStateChanged,
   User,
 } from 'firebase/auth';
-import firebaseConfig from '../firebase-applet-config.json';
+import { auth } from '@/lib/firebase';
 import type { UserProfile } from './store';
 
 export const SCOPES = [
@@ -20,8 +18,7 @@ export const SCOPES = [
 ];
 
 function getClientAuth() {
-  const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
-  return getAuth(app);
+  return auth;
 }
 
 const provider = new GoogleAuthProvider();
@@ -43,8 +40,12 @@ export const initAuth = (
   if (typeof window === 'undefined') {
     return () => {};
   }
-  const auth = getClientAuth();
-  return onAuthStateChanged(auth, async (user: User | null) => {
+  const clientAuth = getClientAuth();
+  if (!clientAuth) {
+    if (onAuthFailure) onAuthFailure();
+    return () => {};
+  }
+  return onAuthStateChanged(clientAuth, async (user: User | null) => {
     if (user) {
       if (cachedAccessToken) {
         if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
@@ -67,8 +68,11 @@ export const googleSignIn = async (): Promise<{
 } | null> => {
   try {
     isSigningIn = true;
-    const auth = getClientAuth();
-    const result = await signInWithPopup(auth, provider);
+    const clientAuth = getClientAuth();
+    if (!clientAuth) {
+      throw new Error('Firebase authentication is not configured');
+    }
+    const result = await signInWithPopup(clientAuth, provider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (!credential?.accessToken) {
       throw new Error('Failed to get access token from Firebase Auth');
@@ -108,8 +112,10 @@ export const getAccessToken = async (): Promise<string | null> => {
 
 export const logout = async () => {
   if (typeof window !== 'undefined') {
-    const auth = getClientAuth();
-    await auth.signOut();
+    const clientAuth = getClientAuth();
+    if (clientAuth) {
+      await clientAuth.signOut();
+    }
   }
   cachedAccessToken = null;
 };

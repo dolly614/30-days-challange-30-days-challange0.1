@@ -203,7 +203,7 @@ export const DATA_RETENTION_POLICY_REGISTRY: readonly DataRetentionPolicyRecord[
       ],
       storage_locations: [
         'public.users (Supabase PostgreSQL)',
-        '/tmp/uyanix-auth-store-v1.json (users)',
+        'public.users (Supabase PostgreSQL authoritative)',
         'localStorage:uyanix-30day-storage (active session client cache)',
       ],
       retention_period:
@@ -242,8 +242,8 @@ export const DATA_RETENTION_POLICY_REGISTRY: readonly DataRetentionPolicyRecord[
         'raw_refresh_token',
       ],
       storage_locations: [
-        'public.user_sessions',
-        '/tmp/uyanix-auth-store-v1.json (authAccounts, sessions, revokedSessions)',
+        'public.user_sessions (Supabase PostgreSQL)',
+        'public.auth_identities (Supabase PostgreSQL authoritative)',
         'HttpOnly cookie: uyanix_session',
       ],
       retention_period:
@@ -278,8 +278,7 @@ export const DATA_RETENTION_POLICY_REGISTRY: readonly DataRetentionPolicyRecord[
       ],
       prohibited_fields_never_stored: ['plaintext_otp_code'],
       storage_locations: [
-        'public.otp_challenges',
-        '/tmp/uyanix-auth-store-v1.json (otpChallenges, otpRateStates)',
+        'public.otp_challenges (Supabase PostgreSQL authoritative)',
         'HttpOnly cookie: uyanix_otp_binding',
       ],
       retention_period:
@@ -316,8 +315,7 @@ export const DATA_RETENTION_POLICY_REGISTRY: readonly DataRetentionPolicyRecord[
         'plaintext_new_password',
       ],
       storage_locations: [
-        'public.password_reset_tokens',
-        '/tmp/uyanix-auth-store-v1.json (passwordResetTokens, passwordResetRateStates)',
+        'public.password_reset_tokens (Supabase PostgreSQL authoritative)',
       ],
       retention_period:
         '15-minute active token TTL; expired/used reset metadata purged after 24 hours',
@@ -661,8 +659,7 @@ export const DATA_RETENTION_POLICY_REGISTRY: readonly DataRetentionPolicyRecord[
       ],
       prohibited_fields_never_stored: ['student_password_hash'],
       storage_locations: [
-        'public.referrals',
-        '/tmp/uyanix-auth-store-v1.json (referralRegistrations)',
+        'public.referrals (Supabase PostgreSQL authoritative)',
       ],
       retention_period:
         '8 years for commission payout auditability; student PII anonymized on student deletion',
@@ -916,9 +913,8 @@ export const DATA_RETENTION_POLICY_REGISTRY: readonly DataRetentionPolicyRecord[
         'raw_api_secret',
       ],
       storage_locations: [
-        'public.audit_logs',
+        'public.audit_logs (Supabase PostgreSQL authoritative)',
         'public.incident_audit_events',
-        '/tmp/uyanix-auth-store-v1.json (auditLogs)',
       ],
       retention_period:
         '2 years append-only active retention + 5 years cold archive',
@@ -949,7 +945,7 @@ export const DATA_RETENTION_POLICY_REGISTRY: readonly DataRetentionPolicyRecord[
       ],
       prohibited_fields_never_stored: ['raw_Authorization_header'],
       storage_locations: [
-        '/tmp/uyanix-auth-store-v1.json (rateLimits, bannedUserIds, auditLogs)',
+        'public.audit_logs (Supabase PostgreSQL authoritative)',
         'post-deployment-monitoring alerts',
       ],
       retention_period: '2 years for security forensics and abuse prevention',
@@ -1041,7 +1037,7 @@ export const DATA_RETENTION_POLICY_REGISTRY: readonly DataRetentionPolicyRecord[
         'sha256_checksum',
       ],
       prohibited_fields_never_stored: ['unencrypted_public_backup_dumps'],
-      storage_locations: ['/tmp/uyanix-auth-store-v1.backup-*.json'],
+      storage_locations: ['supabase://public.users+auth_identities/backup'],
       retention_period:
         '30 days rolling encrypted backup window; subject to post-restore tombstone re-application so deleted users are never resurrected',
       retention_policy_status: 'ACTIVE_ENFORCED',
@@ -1065,8 +1061,7 @@ export const DATA_RETENTION_POLICY_REGISTRY: readonly DataRetentionPolicyRecord[
       minimum_necessary_fields: ['lock_pid', 'created_at'],
       prohibited_fields_never_stored: ['persistent_pii_in_temp_files'],
       storage_locations: [
-        '/tmp/uyanix-auth-store-v1.lock',
-        '/tmp/uyanix-auth-store-v1.json.tmp.*',
+        'PostgreSQL ACID transaction isolation and unique constraints',
       ],
       retention_period:
         'Immediate deletion upon transaction completion (stale lock recovery threshold: 5 seconds)',

@@ -70,7 +70,7 @@ export default function LoginPage() {
       const redirectTo = redirectValidation.ok
         ? redirectValidation.safeRedirectPath
         : redirectValidation.safeFallbackPath;
-      router.push(redirectTo);
+      router.push(redirectTo as any);
       router.refresh();
     } catch {
       toast.error('Authentication failed. Please try again.');

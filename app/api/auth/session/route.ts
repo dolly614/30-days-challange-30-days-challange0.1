@@ -73,7 +73,7 @@ export async function POST(req: NextRequest) {
   }
 
   const currentToken = extractSessionTokenFromRequest(req);
-  const rotated = rotateSessionToken(currentToken);
+  const rotated = await rotateSessionToken(currentToken);
   if (!rotated.ok) {
     const res = NextResponse.json(
       { authenticated: false, phoneVerified: false, user: null, error: rotated.error },

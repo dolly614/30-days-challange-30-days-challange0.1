@@ -60,7 +60,7 @@ export function Header() {
     { href: '/teacher', label: 'Teacher' },
     { href: '/admin', label: 'Admin' },
     { href: '/sheets', label: 'Google Sheets' },
-  ];
+  ] as const;
 
   const handleConfirmLogout = async () => {
     await googleLogout().catch(() => {});

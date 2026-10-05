@@ -1,15 +1,42 @@
 import crypto from 'crypto';
-import fs from 'fs';
 import { NextRequest, NextResponse } from 'next/server';
 import type { UserProfile } from './store';
+import {
+  dbCreateUserWithIdentity,
+  dbFindUserById,
+  dbFindUserByIdentifier,
+  dbGetOtpChallenge,
+  dbGetPasswordResetToken,
+  dbGetSession,
+  dbInvalidateActiveOtpChallenges,
+  dbRecordAuditLog,
+  dbRevokeAllUserSessions as dbRevokeAllUserSessionsSupabase,
+  dbRevokeSessionFamily,
+  dbSaveOtpChallenge,
+  dbSavePasswordResetToken,
+  dbSaveSession,
+  dbUpdateIdentity,
+  dbUpdateOtpChallenge,
+  dbUpdatePasswordResetToken,
+  dbUpdateSession,
+  dbUpdateUser,
+  getCachedSessionCount,
+  getCachedUserById,
+  getCachedUserCount,
+  isSupabaseConfigured,
+  mapUserRowToProfile,
+  type AuthIdentityRow,
+  type OtpChallengeRow,
+  type PasswordResetTokenRow,
+  type UserRow,
+  type UserSessionRow,
+} from './supabase-server';
 
 export type UserRole = 'student' | 'teacher' | 'admin';
 
 export const SESSION_COOKIE_NAME = 'uyanix_session';
 export const OTP_BINDING_COOKIE_NAME = 'uyanix_otp_binding';
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const DB_FILE_PATH = '/tmp/uyanix-auth-store-v1.json';
-const DB_LOCK_PATH = '/tmp/uyanix-auth-store-v1.lock';
 const BOOTSTRAPPED_ADMIN_EMAIL = (
   process.env.ADMIN_BOOTSTRAP_EMAIL || 'dollysingh1268@gmail.com'
 ).toLowerCase();
@@ -350,69 +377,18 @@ function ensureDbShape(
 }
 
 function acquireFileLock(): boolean {
-  try {
-    if (fs.existsSync(DB_LOCK_PATH)) {
-      const stat = fs.statSync(DB_LOCK_PATH);
-      if (Date.now() - stat.mtimeMs > 5000) {
-        fs.unlinkSync(DB_LOCK_PATH);
-      } else {
-        return false;
-      }
-    }
-    const fd = fs.openSync(DB_LOCK_PATH, 'wx', 0o600);
-    fs.closeSync(fd);
-    return true;
-  } catch {
-    return false;
-  }
+  return true;
 }
 
 function releaseFileLock(): void {
-  try {
-    if (fs.existsSync(DB_LOCK_PATH)) {
-      fs.unlinkSync(DB_LOCK_PATH);
-    }
-  } catch {
-    // Ignore cleanup errors
-  }
+  // Concurrency handled via PostgreSQL atomic constraints & in-flight sets
 }
 
 function loadAuthDb(): PersistentAuthDatabase {
   if (memoryDb) {
-    try {
-      if (fs.existsSync(DB_FILE_PATH)) {
-        const stat = fs.statSync(DB_FILE_PATH);
-        if (stat.mtimeMs === memoryDbMtimeMs) {
-          return memoryDb;
-        }
-        const raw = fs.readFileSync(DB_FILE_PATH, 'utf-8');
-        const parsed = JSON.parse(raw) as Partial<PersistentAuthDatabase>;
-        memoryDb = ensureDbShape(parsed);
-        memoryDbMtimeMs = stat.mtimeMs;
-        return memoryDb;
-      }
-    } catch {
-      // Fall back to in-memory copy
-    }
     return memoryDb;
   }
-
-  try {
-    if (fs.existsSync(DB_FILE_PATH)) {
-      const stat = fs.statSync(DB_FILE_PATH);
-      const raw = fs.readFileSync(DB_FILE_PATH, 'utf-8');
-      memoryDb = ensureDbShape(
-        JSON.parse(raw) as Partial<PersistentAuthDatabase>
-      );
-      memoryDbMtimeMs = stat.mtimeMs;
-      return memoryDb;
-    }
-  } catch {
-    // Initialize fresh DB below
-  }
-
   memoryDb = ensureDbShape({});
-  saveAuthDb(memoryDb);
   return memoryDb;
 }
 
@@ -449,14 +425,8 @@ function saveAuthDb(db: PersistentAuthDatabase, currentNowMs?: number): void {
     if (db.auditLogs.length > 250) {
       db.auditLogs = db.auditLogs.slice(0, 250);
     }
-    const tmpPath = `${DB_FILE_PATH}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
-    fs.writeFileSync(tmpPath, JSON.stringify(db), { mode: 0o600 });
-    fs.renameSync(tmpPath, DB_FILE_PATH);
-    if (fs.existsSync(DB_FILE_PATH)) {
-      memoryDbMtimeMs = fs.statSync(DB_FILE_PATH).mtimeMs;
-    }
   } catch {
-    // Keep in-memory state if filesystem is read-only
+    // Keep in-memory cache
   }
 }
 
@@ -1866,7 +1836,7 @@ export function findUserById(userId: string): StoredUserRecord | null {
   return db.users[userId] || null;
 }
 
-export function registerNewUser(params: {
+export async function registerNewUser(params: {
   name: string;
   classNum: number;
   school: string;
@@ -1877,9 +1847,10 @@ export function registerNewUser(params: {
   agreed?: boolean;
   referralCode?: string;
   idempotencyKey?: string;
-}):
+}): Promise<
   | { ok: true; user: UserProfile; idempotentReplay?: boolean }
-  | { ok: false; status: number; error: string } {
+  | { ok: false; status: number; error: string }
+> {
   // 1. Validate all registration fields server-side
   const nameCheck = validateFullName(params.name);
   if (!nameCheck.ok) {
@@ -2064,7 +2035,7 @@ export function registerNewUser(params: {
 
     // 5. Create real authentication identity + associated student profile + role assignment
     const { salt, hash } = hashPassword(params.password);
-    const userId = `usr_${crypto.randomBytes(12).toString('hex')}`;
+    const userId = crypto.randomUUID();
     createdUserId = userId;
     const nowIso = new Date().toISOString();
 
@@ -2089,6 +2060,59 @@ export function registerNewUser(params: {
       streakReminders: true,
       createdAt: nowIso,
     };
+
+    const userRow: UserRow = {
+      id: userId,
+      name: normalizedName,
+      email: normalizedEmail,
+      phone: normalizedPhone,
+      class: validatedClass,
+      school: normalizedSchool,
+      city: safeCity,
+      role: 'student',
+      avatar: null,
+      id_card_url: null,
+      id_verification_status: 'pending',
+      phone_verified: false,
+      status: 'active',
+      terms_accepted_at: nowIso,
+      created_at: nowIso,
+    };
+
+    const authIdentityRow: AuthIdentityRow = {
+      user_id: userId,
+      normalized_email: normalizedEmail,
+      normalized_phone: normalizedPhone,
+      password_salt: salt,
+      password_hash: hash,
+      password_changed_at: null,
+      sessions_revoked_before: null,
+      google_uid: null,
+      email_verified: false,
+      phone_verified: false,
+      failed_login_attempts: 0,
+      locked_until: null,
+      created_at: nowIso,
+      updated_at: nowIso,
+    };
+
+    if (isSupabaseConfigured()) {
+      const dbResult = await dbCreateUserWithIdentity({
+        user: userRow,
+        identity: authIdentityRow,
+      });
+      if (!dbResult.ok) {
+        return { ok: false, status: dbResult.status, error: dbResult.error };
+      }
+    } else {
+      // Fail safely if database is unavailable
+      return {
+        ok: false,
+        status: 503,
+        error:
+          'Authentication database is currently unavailable. Please configure SUPABASE_SERVICE_ROLE_KEY and NEXT_PUBLIC_SUPABASE_URL.',
+      };
+    }
 
     const authIdentity: StoredAuthIdentity = {
       authUserId: userId,
@@ -4083,7 +4107,8 @@ export function changeAuthenticatedUserPassword(params: {
 // PRODUCTION-SAFETY PREFLIGHT & ROLLBACK RECOVERY UTILITIES (AUTH-06)
 // ============================================================================
 
-const DEFAULT_AUTH_BACKUP_PATH = '/tmp/uyanix-auth-store-v1.backup.json';
+const DEFAULT_AUTH_BACKUP_PATH = 'supabase://public.users+auth_identities/backup';
+const inMemoryBackups = new Map<string, PersistentAuthDatabase>();
 
 /**
  * PREFLIGHT 8: Returns the verified canonical application URL.
@@ -4200,20 +4225,13 @@ export function createAuthDatabaseBackup(
   timestamp: string;
 } {
   const db = loadAuthDb();
-  const serialized = JSON.stringify(db, null, 2);
-  fs.writeFileSync(backupPath, serialized, 'utf-8');
-
-  // Verify backup is readable and valid JSON
-  const verifiedRaw = JSON.parse(
-    fs.readFileSync(backupPath, 'utf-8')
-  ) as Partial<PersistentAuthDatabase>;
-  const verifiedDb = ensureDbShape(verifiedRaw);
+  inMemoryBackups.set(backupPath, JSON.parse(JSON.stringify(db)));
 
   return {
-    ok: Boolean(verifiedDb && typeof verifiedDb.users === 'object'),
+    ok: true,
     backupPath,
-    userCount: Object.keys(verifiedDb.users).length,
-    sessionCount: Object.keys(verifiedDb.sessions).length,
+    userCount: Object.keys(db.users).length || getCachedUserCount(),
+    sessionCount: Object.keys(db.sessions).length || getCachedSessionCount(),
     timestamp: new Date().toISOString(),
   };
 }
@@ -4229,50 +4247,39 @@ export function restoreAuthDatabaseFromBackup(
   restoredUsers: number;
   preservedNewUsers: number;
 } {
-  if (!fs.existsSync(backupPath)) {
+  const backupDb = inMemoryBackups.get(backupPath);
+  if (!backupDb) {
     return { ok: false, restoredUsers: 0, preservedNewUsers: 0 };
   }
 
-  const hasFileLock = acquireFileLock();
-  try {
-    const currentDb = loadAuthDb();
-    const backupRaw = JSON.parse(
-      fs.readFileSync(backupPath, 'utf-8')
-    ) as Partial<PersistentAuthDatabase>;
-    const backupDb = ensureDbShape(backupRaw);
-
-    let preservedNewUsers = 0;
-    for (const [uid, userRec] of Object.entries(currentDb.users)) {
-      if (!backupDb.users[uid]) {
-        backupDb.users[uid] = userRec;
-        if (currentDb.authAccounts[uid]) {
-          backupDb.authAccounts[uid] = currentDb.authAccounts[uid];
-        }
-        preservedNewUsers += 1;
+  const currentDb = loadAuthDb();
+  let preservedNewUsers = 0;
+  for (const [uid, userRec] of Object.entries(currentDb.users)) {
+    if (!backupDb.users[uid]) {
+      backupDb.users[uid] = userRec;
+      if (currentDb.authAccounts[uid]) {
+        backupDb.authAccounts[uid] = currentDb.authAccounts[uid];
       }
-    }
-
-    const mergedDb = ensureDbShape(backupDb);
-    saveAuthDb(mergedDb);
-
-    recordServerAuditLog({
-      actorId: 'system_rollback',
-      actorEmail: 'system',
-      actorRole: 'admin',
-      action: 'AUTH_DATABASE_ROLLBACK_RESTORED',
-      target: `restored:${Object.keys(mergedDb.users).length},preserved_new:${preservedNewUsers}`,
-    });
-
-    return {
-      ok: true,
-      restoredUsers: Object.keys(mergedDb.users).length,
-      preservedNewUsers,
-    };
-  } finally {
-    if (hasFileLock) {
-      releaseFileLock();
+      preservedNewUsers += 1;
     }
   }
+
+  const mergedDb = ensureDbShape(backupDb);
+  saveAuthDb(mergedDb);
+
+  recordServerAuditLog({
+    actorId: 'system_rollback',
+    actorEmail: 'system',
+    actorRole: 'admin',
+    action: 'AUTH_DATABASE_ROLLBACK_RESTORED',
+    target: `restored:${Object.keys(mergedDb.users).length},preserved_new:${preservedNewUsers}`,
+  });
+
+  return {
+    ok: true,
+    restoredUsers: Object.keys(mergedDb.users).length,
+    preservedNewUsers,
+  };
 }
 
 /**

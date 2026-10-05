@@ -237,7 +237,7 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      const result = createOtpChallenge(phone, {
+      const result = await createOtpChallenge(phone, {
         isResend: rawAction === 'resend',
         boundUserId: activeSession?.user.id,
       });
@@ -289,7 +289,7 @@ export async function POST(req: NextRequest) {
     }
 
     const code = typeof body.otpCode === 'string' ? body.otpCode : '';
-    const verifyResult = verifyOtpChallenge(phone, code, {
+    const verifyResult = await verifyOtpChallenge(phone, code, {
       boundPhone: boundContext?.phone,
       boundUserId: boundContext?.userId || activeSession?.user.id,
       boundChallengeId: boundContext?.challengeId,

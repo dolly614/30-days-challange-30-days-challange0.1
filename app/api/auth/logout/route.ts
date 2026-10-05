@@ -30,9 +30,9 @@ export async function POST(req: NextRequest) {
   const token = extractSessionTokenFromRequest(req);
 
   if (logoutAllSessions && auth) {
-    revokeAllUserSessions(auth.user.id, { reason: 'user_logout_all_sessions' });
+    await revokeAllUserSessions(auth.user.id, { reason: 'user_logout_all_sessions' });
   } else if (token) {
-    revokeSessionToken(token, 'user_logout');
+    await revokeSessionToken(token, 'user_logout');
   }
 
   const res = NextResponse.json(

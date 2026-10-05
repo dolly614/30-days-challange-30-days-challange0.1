@@ -72,7 +72,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const result = authenticateWithPassword(
+    const result = await authenticateWithPassword(
       parsed.data.identifier,
       parsed.data.password
     );

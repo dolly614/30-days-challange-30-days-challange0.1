@@ -49,6 +49,8 @@ export interface UserProfile {
   city: string;
   role: 'student' | 'teacher' | 'admin';
   avatar?: string;
+  idCardUrl?: string;
+  idVerificationStatus?: string;
   idVerified: boolean;
   idCardName?: string;
   streakReminders: boolean;

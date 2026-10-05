@@ -113,7 +113,7 @@ export async function POST(req: NextRequest) {
     const identifier =
       typeof payload.identifier === 'string' ? payload.identifier.trim() : '';
 
-    const result = createPasswordResetRequest({ identifier });
+    const result = await createPasswordResetRequest({ identifier });
     if (!result.ok) {
       const headers: Record<string, string> = {};
       if (result.retryAfterSec) {

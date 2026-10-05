@@ -74,6 +74,30 @@ CREATE TABLE public.user_sessions (
 );
 ALTER TABLE public.user_sessions ENABLE ROW LEVEL SECURITY;
 
+-- 1E. AUTH IDENTITIES / CREDENTIALS TABLE (AUTHORITATIVE SERVER-ONLY STORAGE FOR PASSWORD HASH & SALT)
+CREATE TABLE IF NOT EXISTS public.auth_identities (
+  user_id UUID PRIMARY KEY REFERENCES public.users(id) ON DELETE CASCADE,
+  normalized_email TEXT,
+  normalized_phone TEXT NOT NULL,
+  password_salt TEXT,
+  password_hash TEXT,
+  password_changed_at TIMESTAMPTZ,
+  sessions_revoked_before TIMESTAMPTZ,
+  google_uid TEXT UNIQUE,
+  email_verified BOOLEAN NOT NULL DEFAULT FALSE,
+  phone_verified BOOLEAN NOT NULL DEFAULT FALSE,
+  failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+  locked_until TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE public.auth_identities ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Auth identities are server-only access"
+  ON public.auth_identities FOR ALL
+  USING (public.get_my_role() = 'admin')
+  WITH CHECK (public.get_my_role() = 'admin');
+
 -- 2. CHAPTERS TABLE
 CREATE TABLE public.chapters (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

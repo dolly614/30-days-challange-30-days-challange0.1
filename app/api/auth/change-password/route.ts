@@ -144,7 +144,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const result = changeAuthenticatedUserPassword({
+    const result = await changeAuthenticatedUserPassword({
       authenticatedUserId: auth.user.id,
       currentSessionJti: auth.session.jti,
       currentSessionExp: auth.session.exp,

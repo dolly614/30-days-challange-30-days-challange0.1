@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import firebaseConfig from '@/firebase-applet-config.json';
+import { auth, db, storage } from '@/lib/firebase';
 import {
   enforceRateLimit,
   extractSessionTokenFromRequest,
@@ -64,8 +64,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const firebaseApiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY || '';
     const lookupUrl = `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(
-      firebaseConfig.apiKey
+      firebaseApiKey
     )}`;
     const ssrfCheck = validateGoogleUpstreamUrlAgainstSsrf(lookupUrl);
     if (!ssrfCheck.ok) {
@@ -106,7 +107,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const userProfile = upsertGoogleAuthenticatedUser({
+    const userProfile = await upsertGoogleAuthenticatedUser({
       googleUid: verifiedAccount.localId,
       email: verifiedAccount.email,
       emailVerified: Boolean(verifiedAccount.emailVerified),

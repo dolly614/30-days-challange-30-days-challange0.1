@@ -315,7 +315,7 @@ export async function POST(req: NextRequest) {
         : undefined);
 
     // 6. Explicitly map validated fields into atomic server registration
-    const result = registerNewUser({
+    const result = await registerNewUser({
       name: nameResult.value,
       classNum: classResult.value,
       school: schoolResult.value,
