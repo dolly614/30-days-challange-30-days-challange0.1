@@ -62,10 +62,11 @@ export default function LoginPage() {
       setPassword('');
       toast.success('Welcome back to Uyanix 30 Days Challenge! 🚀');
       const params = new URLSearchParams(window.location.search);
-      const rawRedirect = params.get('redirect') || '/dashboard';
+      const defaultDest = authoritativeUser?.role === 'admin' ? '/admin' : '/dashboard';
+      const rawRedirect = params.get('redirect') || defaultDest;
       const redirectValidation = validateSafeInternalRedirect(
         rawRedirect,
-        '/dashboard'
+        defaultDest
       );
       const redirectTo = redirectValidation.ok
         ? redirectValidation.safeRedirectPath
@@ -125,8 +126,9 @@ export default function LoginPage() {
       const authoritativeUser = (await syncServerSession()) || verifyData.user;
       login(authoritativeUser);
       setOtpCode('');
-      toast.success('Mobile OTP Verified! Redirecting to Dashboard...');
-      router.push('/dashboard');
+      toast.success('Mobile OTP Verified! Redirecting...');
+      const defaultDest = authoritativeUser?.role === 'admin' ? '/admin' : '/dashboard';
+      router.push(defaultDest as any);
       router.refresh();
     } catch {
       toast.error('OTP verification failed. Please try again.');

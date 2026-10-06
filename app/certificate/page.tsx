@@ -33,6 +33,9 @@ export default function CertificatePage() {
   const [serverQrUrl, setServerQrUrl] = useState<string>(
     buildCanonicalCertificatePublicVerificationUrl('UYX-CERT-A9F48E2C1B7D03E6')
   );
+  const [serverRecipientName, setServerRecipientName] = useState<string>('');
+  const [serverScore, setServerScore] = useState<number | null>(null);
+  const [serverRank, setServerRank] = useState<number | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -42,6 +45,16 @@ export default function CertificatePage() {
         if (active && data?.publicCertificateId && data?.qrVerificationUrl) {
           setServerCertId(data.publicCertificateId);
           setServerQrUrl(data.qrVerificationUrl);
+          if (data.recipientName) {
+            setServerRecipientName(data.recipientName);
+            setCustomName(data.recipientName);
+          }
+          if (typeof data.scoreSnapshot === 'number') {
+            setServerScore(data.scoreSnapshot);
+          }
+          if (typeof data.rankSnapshot === 'number') {
+            setServerRank(data.rankSnapshot);
+          }
         }
       })
       .catch(() => {});
@@ -145,7 +158,7 @@ export default function CertificatePage() {
               <b className="text-foreground">{currentUser?.classNum || 12}</b>) for successfully completing{' '}
               <b className="text-secondary">{completedDays.length} Days</b> of consistent daily learning and achieving{' '}
               <b className="text-primary">
-                Rank #{latestAttempt?.rank || 7}
+                Rank #{serverRank ?? (latestAttempt?.rank || 4)}
               </b>{' '}
               in the Uyanix 30 Days Challenge 2026.
             </p>

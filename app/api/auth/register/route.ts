@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
+  enforceDistributedRateLimit,
   enforceRateLimit,
   extractSessionTokenFromRequest,
   getClientIp,
@@ -114,7 +115,7 @@ export async function POST(req: NextRequest) {
     const ip = getClientIp(req);
 
     // 1. IP-based rate limit for registration abuse protection
-    const ipRate = enforceRateLimit(`register:ip:${ip}`, 10, 15 * 60 * 1000);
+    const ipRate = await enforceDistributedRateLimit(`register:ip:${ip}`, 10, 15 * 60 * 1000);
     if (!ipRate.allowed) {
       return NextResponse.json(
         {
@@ -229,7 +230,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Rate limit per normalized mobile number to prevent targeted phone flooding
-    const phoneRate = enforceRateLimit(
+    const phoneRate = await enforceDistributedRateLimit(
       `register:phone:${phoneResult.value}`,
       5,
       15 * 60 * 1000

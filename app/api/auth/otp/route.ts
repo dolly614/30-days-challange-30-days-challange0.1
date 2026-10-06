@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   clearOtpBindingCookie,
   createOtpChallenge,
+  enforceDistributedRateLimit,
   enforceRateLimit,
   extractSessionTokenFromRequest,
   getAuthenticatedUser,
@@ -219,7 +220,7 @@ export async function POST(req: NextRequest) {
     if (rawAction === 'send' || rawAction === 'resend') {
       const window10mMs =
         OTP_SECURITY_CONFIG.OTP_ABUSE_WINDOW_MINUTES * 60 * 1000;
-      const sendIpRate = enforceRateLimit(
+      const sendIpRate = await enforceDistributedRateLimit(
         `otp:send:ip:${ip}`,
         OTP_SECURITY_CONFIG.OTP_MAX_SENDS_PER_PHONE_PER_24_HOURS,
         window10mMs
@@ -270,7 +271,7 @@ export async function POST(req: NextRequest) {
     // Enforce OTP_VERIFY_MAX_REQUESTS_PER_IP_PER_10_MINUTES = 30
     const verifyWindowMs =
       OTP_SECURITY_CONFIG.OTP_ABUSE_WINDOW_MINUTES * 60 * 1000;
-    const verifyIpRate = enforceRateLimit(
+    const verifyIpRate = await enforceDistributedRateLimit(
       `otp:verify:ip:${ip}`,
       OTP_SECURITY_CONFIG.OTP_VERIFY_MAX_REQUESTS_PER_IP_PER_10_MINUTES,
       verifyWindowMs

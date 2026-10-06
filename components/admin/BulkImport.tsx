@@ -7,27 +7,36 @@ import {
   Trash2,
   RotateCcw,
   RefreshCw,
+  Loader2,
+  CheckCircle2,
+  AlertTriangle,
 } from 'lucide-react';
 import { useUyanixStore } from '@/lib/store';
-import { getTopicsForClass } from '@/lib/curriculum';
 import { toast } from 'sonner';
 
-function detectDayFromFilename(filename: string, fallbackIndex: number): number {
-  const match = filename.match(/(?:day[-_\s]*)?(\d{1,2})/i);
-  if (match) {
-    const num = Number(match[1]);
-    if (num >= 1 && num <= 30) return num;
-  }
-  return Math.min(30, Math.max(1, fallbackIndex + 1));
+interface ZipPreviewItem {
+  day: number;
+  filename: string;
+  title: string;
+  size: number;
+  contentPreview: string;
 }
 
 export function BulkImport() {
-  const { bulkSaveChapters, deleteClassChapters, resetAllChapters } =
+  const { bulkSaveChapters, deleteClassChapters, resetAllChapters, refreshChapters } =
     useUyanixStore();
 
   const [targetClass, setTargetClass] = useState(1);
   const [overwrite, setOverwrite] = useState(true);
   const [selectedDays, setSelectedDays] = useState<number[]>([]);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [isCommitting, setIsCommitting] = useState(false);
+
+  // ZIP Preview State
+  const [pendingZipFile, setPendingZipFile] = useState<File | null>(null);
+  const [zipPreview, setZipPreview] = useState<ZipPreviewItem[] | null>(null);
+  const [zipDuplicates, setZipDuplicates] = useState<number[]>([]);
+  const [zipWarnings, setZipWarnings] = useState<string[]>([]);
 
   const toggleDaySelection = (day: number) => {
     setSelectedDays((prev) =>
@@ -35,38 +44,181 @@ export function BulkImport() {
     );
   };
 
-  const handleFilesUpload = async (
-    files: FileList | null,
-    onlySelected = false
-  ) => {
-    if (!files || files.length === 0) return;
+  const handleZipFileSelect = async (file: File | undefined) => {
+    if (!file) return;
 
-    const topics = getTopicsForClass(targetClass);
-    const itemsToSave: { day: number; title: string; content: string }[] = [];
-
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      const detectedDay =
-        onlySelected && selectedDays[i]
-          ? selectedDays[i]
-          : detectDayFromFilename(file.name, i);
-
-      if (onlySelected && selectedDays.length > 0 && !selectedDays.includes(detectedDay)) {
-        continue;
-      }
-
-      const defaultTitle = topics[detectedDay - 1] || `Day ${detectedDay}`;
-      itemsToSave.push({
-        day: detectedDay,
-        title: defaultTitle,
-        content: `Uploaded from ${file.name} (${Math.round(file.size / 1024)} KB).\n\nComplete study material for Class ${targetClass} — Day ${detectedDay}: ${defaultTitle}.`,
-      });
+    if (!file.name.toLowerCase().endsWith('.zip') && file.type !== 'application/zip') {
+      toast.error('Please select a valid ZIP archive (.zip)');
+      return;
     }
 
-    const savedCount = bulkSaveChapters(targetClass, itemsToSave, overwrite);
-    toast.success(
-      `Class ${targetClass}: ${savedCount} chapter(s) imported successfully! 📚`
-    );
+    if (file.size > 35 * 1024 * 1024) {
+      toast.error('ZIP archive exceeds the maximum 35MB size limit.');
+      return;
+    }
+
+    setIsProcessing(true);
+    setPendingZipFile(file);
+    setZipPreview(null);
+    setZipDuplicates([]);
+    setZipWarnings([]);
+
+    const toastId = toast.loading(`Inspecting & extracting "${file.name}"...`);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('classNum', String(targetClass));
+      formData.append('commit', 'false'); // Preview only first
+
+      const res = await fetch('/api/admin/chapters/parse-zip', {
+        method: 'POST',
+        credentials: 'include',
+        body: formData,
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        toast.error(data.error || 'Failed to extract ZIP archive', { id: toastId });
+        setPendingZipFile(null);
+        return;
+      }
+
+      setZipPreview(data.preview || []);
+      setZipDuplicates(data.duplicates || []);
+      setZipWarnings(data.warnings || []);
+
+      toast.success(
+        `ZIP extracted: Found ${data.entriesCount} valid PDF chapter(s). Please review and commit to database!`,
+        { id: toastId }
+      );
+    } catch {
+      toast.error('Network failure during ZIP extraction', { id: toastId });
+      setPendingZipFile(null);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleCommitZip = async () => {
+    if (!pendingZipFile || isCommitting) return;
+
+    setIsCommitting(true);
+    const toastId = toast.loading(`Committing ${zipPreview?.length || 0} chapters to database...`);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', pendingZipFile);
+      formData.append('classNum', String(targetClass));
+      formData.append('commit', 'true');
+      formData.append('overwrite', String(overwrite));
+
+      const res = await fetch('/api/admin/chapters/parse-zip', {
+        method: 'POST',
+        credentials: 'include',
+        body: formData,
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        toast.error(data.error || 'Failed to save chapters to database', { id: toastId });
+        return;
+      }
+
+      toast.success(
+        `Class ${targetClass}: ${data.inserted} inserted, ${data.updated} updated in database! 🎉`,
+        { id: toastId }
+      );
+
+      // Revalidate
+      await refreshChapters(targetClass);
+      setPendingZipFile(null);
+      setZipPreview(null);
+    } catch {
+      toast.error('Failed to commit ZIP chapters to server database', { id: toastId });
+    } finally {
+      setIsCommitting(false);
+    }
+  };
+
+  const handleFilesUpload = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+
+    setIsProcessing(true);
+    const toastId = toast.loading(`Processing ${files.length} PDFs...`);
+
+    const itemsToSave: { day: number; title: string; content: string }[] = [];
+
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+          continue;
+        }
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const res = await fetch('/api/admin/chapters/parse-pdf', {
+          method: 'POST',
+          credentials: 'include',
+          body: formData,
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.ok) {
+            const detectedDay = i + 1;
+            itemsToSave.push({
+              day: detectedDay,
+              title: file.name.replace(/\.pdf$/i, '').replace(/[_-]+/g, ' '),
+              content: data.text,
+            });
+          }
+        }
+      }
+
+      if (itemsToSave.length > 0) {
+        const savedCount = await bulkSaveChapters(targetClass, itemsToSave, overwrite);
+        toast.success(
+          `Class ${targetClass}: ${savedCount} chapter(s) saved to authoritative database! 📚`,
+          { id: toastId }
+        );
+        await refreshChapters(targetClass);
+      } else {
+        toast.error('No valid PDFs could be parsed.', { id: toastId });
+      }
+    } catch {
+      toast.error('Failed to upload and parse PDFs.', { id: toastId });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleDeleteClass = async () => {
+    if (!confirm(`Kya aap sach mein Class ${targetClass} ke saare custom chapters delete karna chahte hain?`)) {
+      return;
+    }
+    const success = await deleteClassChapters(targetClass);
+    if (success) {
+      toast.success(`Class ${targetClass} custom chapters deleted from database.`);
+      await refreshChapters(targetClass);
+    } else {
+      toast.error(`Failed to delete Class ${targetClass} chapters.`);
+    }
+  };
+
+  const handleResetAll = async () => {
+    if (!confirm('Warning: Kya aap saari classes ke custom chapters ko database se reset karna chahte hain?')) {
+      return;
+    }
+    const success = await resetAllChapters();
+    if (success) {
+      toast.success('All classes custom chapters reset to default in database!');
+      await refreshChapters();
+    } else {
+      toast.error('Failed to reset chapters in database.');
+    }
   };
 
   return (
@@ -79,10 +231,7 @@ export function BulkImport() {
       </div>
 
       <p className="mt-1 text-sm text-muted-foreground">
-        Ek class select karo, fir 30 PDFs ek saath upload karo ya ek ZIP daalo. Filename se day number auto-detect hota hai (e.g.{' '}
-        <code className="rounded bg-muted px-1">day-01.pdf</code>,
-        <code className="ml-1 rounded bg-muted px-1">Day 5 - Algebra.pdf</code>,
-        <code className="ml-1 rounded bg-muted px-1">05_intro.pdf</code>).
+        Ek class select karo, fir 30 PDFs ek saath upload karo ya ek ZIP daalo. Server archive ko safely inspect karega, PDF text extract karega, aur database transaction ke saath commit karega.
       </p>
 
       <div className="mt-4 grid gap-3 sm:grid-cols-3">
@@ -103,36 +252,43 @@ export function BulkImport() {
           </select>
         </div>
 
-        <label className="flex h-11 cursor-pointer items-center justify-center gap-2 self-end rounded-full bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-soft hover:opacity-90">
-          <CloudUpload className="h-4 w-4" aria-hidden="true" />
+        <label
+          className={`flex h-11 cursor-pointer items-center justify-center gap-2 self-end rounded-full bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-soft hover:opacity-90 ${
+            isProcessing ? 'opacity-50 pointer-events-none' : ''
+          }`}
+        >
+          {isProcessing ? (
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+          ) : (
+            <CloudUpload className="h-4 w-4" aria-hidden="true" />
+          )}
           Upload PDFs (multi-select)
           <input
             accept="application/pdf"
             multiple
             type="file"
-            onChange={(e) => handleFilesUpload(e.target.files, false)}
+            disabled={isProcessing}
+            onChange={(e) => handleFilesUpload(e.target.files)}
             className="hidden"
           />
         </label>
 
-        <label className="flex h-11 cursor-pointer items-center justify-center gap-2 self-end rounded-full bg-secondary px-4 text-sm font-semibold text-secondary-foreground shadow-soft hover:opacity-90">
-          <FileArchive className="h-4 w-4" aria-hidden="true" />
-          Upload ZIP
+        <label
+          className={`flex h-11 cursor-pointer items-center justify-center gap-2 self-end rounded-full bg-secondary px-4 text-sm font-semibold text-secondary-foreground shadow-soft hover:opacity-90 ${
+            isProcessing ? 'opacity-50 pointer-events-none' : ''
+          }`}
+        >
+          {isProcessing ? (
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+          ) : (
+            <FileArchive className="h-4 w-4" aria-hidden="true" />
+          )}
+          {isProcessing ? 'Inspecting ZIP...' : 'Upload Real ZIP'}
           <input
             accept=".zip,application/zip"
             type="file"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (!file) return;
-              const topics = getTopicsForClass(targetClass);
-              const all30 = Array.from({ length: 30 }, (_, i) => ({
-                day: i + 1,
-                title: topics[i] || `Day ${i + 1}`,
-                content: `Imported from archive ${file.name} — Class ${targetClass} Day ${i + 1} Study Notes.`,
-              }));
-              bulkSaveChapters(targetClass, all30, overwrite);
-              toast.success(`ZIP extracted: All 30 days imported for Class ${targetClass}! 🎉`);
-            }}
+            disabled={isProcessing}
+            onChange={(e) => handleZipFileSelect(e.target.files?.[0])}
             className="hidden"
           />
         </label>
@@ -150,10 +306,7 @@ export function BulkImport() {
 
         <button
           type="button"
-          onClick={() => {
-            deleteClassChapters(targetClass);
-            toast.success(`Class ${targetClass} custom chapters deleted.`);
-          }}
+          onClick={handleDeleteClass}
           className="inline-flex h-9 items-center gap-2 rounded-full border border-destructive px-4 text-xs font-semibold text-destructive hover:bg-destructive/10"
         >
           <Trash2 className="h-3.5 w-3.5" aria-hidden="true" /> Delete Class{' '}
@@ -162,16 +315,80 @@ export function BulkImport() {
 
         <button
           type="button"
-          onClick={() => {
-            resetAllChapters();
-            toast.success('All classes custom chapters reset to default!');
-          }}
+          onClick={handleResetAll}
           className="inline-flex h-9 items-center gap-2 rounded-full border border-destructive px-4 text-xs font-semibold text-destructive hover:bg-destructive/10"
         >
           <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" /> Reset All Classes
         </button>
       </div>
 
+      {/* ZIP Archive Inspection & Confirmation Preview */}
+      {zipPreview && (
+        <div className="mt-6 rounded-2xl border-2 border-primary/40 bg-card p-5 shadow-card">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="h-5 w-5 text-secondary" />
+              <h3 className="text-base font-bold">
+                ZIP Inspection Preview — {zipPreview.length} Chapters Extracted
+              </h3>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setZipPreview(null);
+                  setPendingZipFile(null);
+                }}
+                className="h-9 rounded-full border border-border px-3 text-xs font-semibold hover:bg-muted"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isCommitting}
+                onClick={handleCommitZip}
+                className="inline-flex h-9 items-center gap-2 rounded-full bg-primary px-4 text-xs font-semibold text-primary-foreground shadow-soft hover:opacity-90 disabled:opacity-50"
+              >
+                {isCommitting ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                )}
+                {isCommitting ? 'Committing...' : `Commit to Database (Class ${targetClass})`}
+              </button>
+            </div>
+          </div>
+
+          {zipDuplicates.length > 0 && (
+            <div className="mt-3 flex items-center gap-2 rounded-xl bg-amber-500/10 p-3 text-xs text-amber-600">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <span>Duplicate day entries detected for Days: {zipDuplicates.join(', ')}. Overwrite rule will apply.</span>
+            </div>
+          )}
+
+          <div className="mt-4 max-h-56 overflow-y-auto space-y-2 pr-1">
+            {zipPreview.map((item) => (
+              <div
+                key={`${item.day}-${item.filename}`}
+                className="flex items-start justify-between rounded-xl border border-border/80 bg-muted/20 p-2.5 text-xs"
+              >
+                <div>
+                  <span className="font-bold text-primary mr-2">Day {item.day}:</span>
+                  <span className="font-semibold">{item.title}</span>
+                  <span className="text-muted-foreground ml-2 font-mono text-[11px]">
+                    ({item.filename} • {Math.round(item.size / 1024)} KB)
+                  </span>
+                  <p className="mt-1 text-muted-foreground line-clamp-1 italic">
+                    {item.contentPreview}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Selective Re-import Grid */}
       <div className="mt-5 rounded-2xl border border-border bg-muted/20 p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="text-sm font-semibold">
@@ -205,22 +422,16 @@ export function BulkImport() {
 
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-full bg-primary px-4 text-xs font-semibold text-primary-foreground shadow-soft hover:opacity-90">
-            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" /> Re-import
-            Selected/Failed
+            <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" /> Re-import Selected
             <input
               accept="application/pdf"
               multiple
               type="file"
-              onChange={(e) => handleFilesUpload(e.target.files, true)}
+              onChange={(e) => handleFilesUpload(e.target.files)}
               className="hidden"
             />
           </label>
         </div>
-
-        <p className="mt-2 text-xs text-muted-foreground">
-          Tip: Day boxes click karke select karo, fir sirf un days ke PDFs upload karo. Filename se day match hoga (e.g.{' '}
-          <code className="rounded bg-muted px-1">day-07.pdf</code>).
-        </p>
       </div>
     </div>
   );

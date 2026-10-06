@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   BarChart3,
   CreditCard,
@@ -8,6 +8,7 @@ import {
   History,
   ShieldBan,
   Send,
+  Loader2,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -21,15 +22,15 @@ import {
 import { useUyanixStore } from '@/lib/store';
 import { toast } from 'sonner';
 
-const REVENUE_DATA = [
-  { day: 'Sep 21', registrations: 1240, revenue: 145000 },
-  { day: 'Sep 22', registrations: 1580, revenue: 178000 },
-  { day: 'Sep 23', registrations: 1890, revenue: 204000 },
-  { day: 'Sep 24', registrations: 2110, revenue: 192000 },
-  { day: 'Sep 25', registrations: 2450, revenue: 238000 },
-  { day: 'Sep 26', registrations: 1920, revenue: 164853 },
-  { day: 'Sep 27', registrations: 1657, revenue: 150000 },
-];
+interface AnalyticsPoint {
+  day: string;
+  date: string;
+  registrations: number;
+  revenue: number;
+  refunds: number;
+  netRevenue: number;
+  examAttempts: number;
+}
 
 export function AdminExtendedPanels() {
   const {
@@ -44,14 +45,93 @@ export function AdminExtendedPanels() {
   const [bTitle, setBTitle] = useState('');
   const [bBody, setBBody] = useState('');
   const [userSearch, setUserSearch] = useState('');
+  const [isBroadcasting, setIsBroadcasting] = useState(false);
+  const [processingRefundId, setProcessingRefundId] = useState<string | null>(null);
+  const [processingBanId, setProcessingBanId] = useState<string | null>(null);
 
-  const handleBroadcast = (e: React.FormEvent) => {
+  // Authoritative Analytics Data from Server
+  const [analyticsData, setAnalyticsData] = useState<AnalyticsPoint[]>([]);
+  const [isLoadingAnalytics, setIsLoadingAnalytics] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    fetch('/api/admin/metrics', { credentials: 'include' })
+      .then((res) => res.json())
+      .then((data) => {
+        if (!active) return;
+        if (data.ok && Array.isArray(data.analytics)) {
+          setAnalyticsData(data.analytics);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (active) setIsLoadingAnalytics(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleBroadcast = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!bTitle.trim() || !bBody.trim()) return;
-    broadcastNotification(bTitle.trim(), bBody.trim());
-    setBTitle('');
-    setBBody('');
-    toast.success('Notification broadcasted to all 12,847 students! 📢');
+    if (!bTitle.trim() || !bBody.trim() || isBroadcasting) return;
+
+    setIsBroadcasting(true);
+    const toastId = toast.loading('Broadcasting notification via server...');
+
+    try {
+      const result = await broadcastNotification(bTitle.trim(), bBody.trim());
+      if (result.ok) {
+        toast.success(
+          `Notification broadcasted to ${result.recipientCount ?? 1} registered students! 📢`,
+          { id: toastId }
+        );
+        setBTitle('');
+        setBBody('');
+      } else {
+        toast.error('Failed to broadcast notification.', { id: toastId });
+      }
+    } catch {
+      toast.error('Network error during broadcast.', { id: toastId });
+    } finally {
+      setIsBroadcasting(false);
+    }
+  };
+
+  const handleRefund = async (paymentId: string, razorpayId: string) => {
+    if (processingRefundId) return;
+    setProcessingRefundId(paymentId);
+    const toastId = toast.loading(`Processing refund for ${razorpayId}...`);
+
+    try {
+      const success = await refundPayment(paymentId);
+      if (success) {
+        toast.success(`Refund completed for ${razorpayId}! ✅`, { id: toastId });
+      } else {
+        toast.error('Failed to process refund. Ensure payment is captured.', { id: toastId });
+      }
+    } catch {
+      toast.error('Network error during refund.', { id: toastId });
+    } finally {
+      setProcessingRefundId(null);
+    }
+  };
+
+  const handleToggleBan = async (studentId: string, studentName: string) => {
+    if (processingBanId) return;
+    setProcessingBanId(studentId);
+    try {
+      const success = await toggleBanStudent(studentId);
+      if (success) {
+        toast.info(`Updated access status for ${studentName}`);
+      } else {
+        toast.error(`Failed to update status for ${studentName}`);
+      }
+    } catch {
+      toast.error('Network error updating student status.');
+    } finally {
+      setProcessingBanId(null);
+    }
   };
 
   const filteredUsers = leaderboard.filter(
@@ -62,39 +142,49 @@ export function AdminExtendedPanels() {
 
   return (
     <div className="mt-10 space-y-8">
-      {/* Recharts Revenue & Registration Analytics */}
+      {/* Recharts Revenue & Registration Analytics (Server-Authoritative) */}
       <div className="rounded-3xl border border-border bg-card p-6 shadow-card">
         <div className="flex items-center gap-2">
           <BarChart3 className="h-5 w-5 text-primary" />
-          <h2 className="text-xl font-bold">Analytics Overview (7-Day Trend)</h2>
+          <h2 className="text-xl font-bold">Analytics Overview (Authoritative 7-Day Trend)</h2>
         </div>
         <p className="mt-1 text-xs text-muted-foreground">
-          Daily student registrations aur exam fee revenue (INR)
+          Authoritative student registrations aur exam fee revenue (INR) queried from database
         </p>
 
         <div className="mt-5 h-64 w-full">
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={REVENUE_DATA}>
-              <defs>
-                <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#7c3aed" stopOpacity={0.35} />
-                  <stop offset="95%" stopColor="#7c3aed" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
-              <XAxis dataKey="day" fontSize={12} />
-              <YAxis fontSize={12} />
-              <Tooltip />
-              <Area
-                type="monotone"
-                dataKey="revenue"
-                stroke="#7c3aed"
-                strokeWidth={2.5}
-                fillOpacity={1}
-                fill="url(#colorRev)"
-              />
-            </AreaChart>
-          </ResponsiveContainer>
+          {isLoadingAnalytics ? (
+            <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin text-primary" /> Loading analytics metrics...
+            </div>
+          ) : analyticsData.length === 0 ? (
+            <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
+              No revenue events recorded in the last 7 days.
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={analyticsData}>
+                <defs>
+                  <linearGradient id="colorRev" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#7c3aed" stopOpacity={0.35} />
+                    <stop offset="95%" stopColor="#7c3aed" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
+                <XAxis dataKey="day" fontSize={12} />
+                <YAxis fontSize={12} />
+                <Tooltip />
+                <Area
+                  type="monotone"
+                  dataKey="revenue"
+                  stroke="#7c3aed"
+                  strokeWidth={2.5}
+                  fillOpacity={1}
+                  fill="url(#colorRev)"
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          )}
         </div>
       </div>
 
@@ -146,13 +236,15 @@ export function AdminExtendedPanels() {
                     <td className="py-2.5 text-right">
                       <button
                         type="button"
-                        onClick={() => {
-                          toggleBanStudent(u.id);
-                          toast.info(`Updated access status for ${u.name}`);
-                        }}
-                        className="rounded-lg border border-border px-2.5 py-1 font-semibold hover:bg-accent"
+                        disabled={processingBanId === u.id}
+                        onClick={() => handleToggleBan(u.id, u.name)}
+                        className="rounded-lg border border-border px-2.5 py-1 font-semibold hover:bg-accent disabled:opacity-50"
                       >
-                        {u.status === 'banned' ? 'Unban' : 'Suspend'}
+                        {processingBanId === u.id
+                          ? 'Updating...'
+                          : u.status === 'banned'
+                          ? 'Unban'
+                          : 'Suspend'}
                       </button>
                     </td>
                   </tr>
@@ -169,7 +261,7 @@ export function AdminExtendedPanels() {
             <h3 className="text-lg font-bold">Razorpay Payments &amp; Refunds</h3>
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
-            Recent ₹199 exam fee transactions aur instant refund controls
+            Authoritative ₹199 exam fee transactions aur server-governed refund controls
           </p>
 
           <div className="mt-4 max-h-64 overflow-y-auto">
@@ -204,13 +296,11 @@ export function AdminExtendedPanels() {
                       {p.status === 'captured' && (
                         <button
                           type="button"
-                          onClick={() => {
-                            refundPayment(p.id);
-                            toast.success(`Refund initiated for ${p.razorpayId}`);
-                          }}
-                          className="rounded-lg border border-destructive/40 px-2.5 py-1 font-semibold text-destructive hover:bg-destructive/10"
+                          disabled={processingRefundId === p.id}
+                          onClick={() => handleRefund(p.id, p.razorpayId)}
+                          className="rounded-lg border border-destructive/40 px-2.5 py-1 font-semibold text-destructive hover:bg-destructive/10 disabled:opacity-50"
                         >
-                          Refund
+                          {processingRefundId === p.id ? 'Refunding...' : 'Refund'}
                         </button>
                       )}
                     </td>
@@ -233,7 +323,7 @@ export function AdminExtendedPanels() {
             <h3 className="text-lg font-bold">Broadcast Push Notification</h3>
           </div>
           <p className="text-xs text-muted-foreground">
-            Saare registered students ke Notification Bell mein message bhejein.
+            Saare registered students ke Notification Bell mein authoritative message bhejein.
           </p>
           <input
             required
@@ -252,37 +342,50 @@ export function AdminExtendedPanels() {
           />
           <button
             type="submit"
-            className="inline-flex h-10 items-center gap-2 rounded-full bg-gradient-hero px-5 text-xs font-semibold text-primary-foreground shadow-soft"
+            disabled={isBroadcasting}
+            className="inline-flex h-10 items-center gap-2 rounded-full bg-primary px-5 text-xs font-semibold text-primary-foreground shadow-soft hover:opacity-90 disabled:opacity-50"
           >
-            <Send className="h-3.5 w-3.5" /> Broadcast Now
+            {isBroadcasting ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Send className="h-3.5 w-3.5" />
+            )}
+            {isBroadcasting ? 'Broadcasting...' : 'Broadcast to All Students'}
           </button>
         </form>
 
+        {/* Real Audit Trail */}
         <div className="rounded-3xl border border-border bg-card p-6 shadow-card">
           <div className="flex items-center gap-2">
             <History className="h-5 w-5 text-primary" />
-            <h3 className="text-lg font-bold">System Audit Logs</h3>
+            <h3 className="text-lg font-bold">Immutable Audit Logs</h3>
           </div>
-          <div className="mt-3 max-h-52 space-y-2 overflow-y-auto text-xs">
-            {auditLogs.map((log) => (
-              <div
-                key={log.id}
-                className="flex items-center justify-between rounded-xl border border-border bg-background px-3 py-2"
-              >
-                <div>
-                  <span className="font-mono font-bold text-primary">
-                    {log.action}
-                  </span>{' '}
-                  <span className="text-foreground">→ {log.target}</span>
-                  <div className="text-[10px] text-muted-foreground">
-                    Actor: {log.actor}
+          <p className="mt-1 text-xs text-muted-foreground">
+            Recent administrative operations recorded in server append-only ledger
+          </p>
+
+          <div className="mt-4 max-h-56 overflow-y-auto space-y-2 text-xs">
+            {auditLogs.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No recent audit logs.</p>
+            ) : (
+              auditLogs.slice(0, 15).map((log) => (
+                <div
+                  key={log.id}
+                  className="rounded-xl border border-border/80 bg-muted/20 p-2.5"
+                >
+                  <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                    <span className="font-mono font-semibold text-primary">
+                      {log.action}
+                    </span>
+                    <span>{log.timestamp}</span>
+                  </div>
+                  <div className="mt-1 text-xs">
+                    Target: <span className="font-semibold">{log.target}</span> • Actor:{' '}
+                    <span className="font-mono text-muted-foreground">{log.actor}</span>
                   </div>
                 </div>
-                <span className="font-mono text-[10px] text-muted-foreground tabular-nums">
-                  {log.timestamp}
-                </span>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
       </div>

@@ -14,6 +14,51 @@ export function TeachersPanel() {
     processWithdrawal,
   } = useUyanixStore();
 
+  const [processingTeacherId, setProcessingTeacherId] = React.useState<string | null>(null);
+  const [processingWithdrawalId, setProcessingWithdrawalId] = React.useState<string | null>(null);
+
+  const handleStatusChange = async (teacherId: string, status: 'approved' | 'rejected', teacherName: string) => {
+    if (processingTeacherId) return;
+    setProcessingTeacherId(teacherId);
+    try {
+      const success = await updateTeacherStatus(teacherId, status);
+      if (success) {
+        if (status === 'approved') {
+          toast.success(`Teacher ${teacherName} approved! ✅`);
+        } else {
+          toast.info(`Teacher ${teacherName} status set to rejected.`);
+        }
+      } else {
+        toast.error(`Failed to update status for ${teacherName}.`);
+      }
+    } catch {
+      toast.error('Network error updating teacher status.');
+    } finally {
+      setProcessingTeacherId(null);
+    }
+  };
+
+  const handleWithdrawalAction = async (withdrawalId: string, status: 'paid' | 'rejected') => {
+    if (processingWithdrawalId) return;
+    setProcessingWithdrawalId(withdrawalId);
+    try {
+      const success = await processWithdrawal(withdrawalId, status);
+      if (success) {
+        if (status === 'paid') {
+          toast.success('Withdrawal marked as PAID in database! 💸');
+        } else {
+          toast.info('Withdrawal rejected & refunded to teacher wallet.');
+        }
+      } else {
+        toast.error('Failed to process withdrawal transition.');
+      }
+    } catch {
+      toast.error('Network error processing withdrawal.');
+    } finally {
+      setProcessingWithdrawalId(null);
+    }
+  };
+
   const approvedCount = teachers.filter((t) => t.status === 'approved').length;
   const pendingCount = teachers.filter((t) => t.status === 'pending').length;
   const totalCommissionsPaid = withdrawals

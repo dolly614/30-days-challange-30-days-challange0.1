@@ -35,6 +35,7 @@ export default function TeacherPortalPage() {
     referrals,
     withdrawals,
     logout,
+    syncTeacherData,
     requestWithdrawal,
     submitTeacherKyc,
     simulateTeacherReferral,
@@ -49,12 +50,14 @@ export default function TeacherPortalPage() {
         router.replace('/login?redirect=/teacher');
       } else if (serverUser.role !== 'teacher' && serverUser.role !== 'admin') {
         router.replace('/dashboard?error=teacher_only');
+      } else {
+        syncTeacherData();
       }
     });
     return () => {
       active = false;
     };
-  }, [syncServerSession, router]);
+  }, [syncServerSession, syncTeacherData, router]);
 
   const teacher = teachers[0];
   const [payoutMethod, setPayoutMethod] = useState<'UPI' | 'Bank'>('UPI');
@@ -83,15 +86,17 @@ export default function TeacherPortalPage() {
     toast.success('Referral link copied to clipboard! 📋');
   };
 
-  const handleWithdrawSubmit = (e: React.FormEvent) => {
+  const handleWithdrawSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!teacher || teacher.balance < amount) {
       toast.error('Minimum ₹500 available balance chahiye payout request ke liye!');
       return;
     }
-    const ok = requestWithdrawal(payoutMethod, destination, amount);
+    const ok = await requestWithdrawal(payoutMethod, destination, amount);
     if (ok) {
       toast.success(`₹${amount} payout request submitted via ${payoutMethod}! 💸`);
+    } else {
+      toast.error('Withdrawal request failed. Please check available balance.');
     }
   };
 

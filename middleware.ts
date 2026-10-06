@@ -78,12 +78,22 @@ interface EdgeSessionPayload {
 }
 
 function getSigningSecret(): string {
-  return (
-    process.env.AUTH_SESSION_SECRET ||
-    process.env.JWT_SECRET ||
-    process.env.GEMINI_API_KEY ||
-    'uyanix-prod-server-hmac-key-9f8e7d6c5b4a3210'
-  );
+  const secret = process.env.AUTH_SESSION_SECRET;
+  if (!secret) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error(
+        'FATAL: AUTH_SESSION_SECRET must be configured in production (minimum 32 bytes). Refusing to start session services.'
+      );
+    }
+    // Strict development-only fallback (never reused from any API keys or service credentials)
+    return 'uyanix-dev-environment-session-key-must-be-replaced-in-prod-64bytes';
+  }
+  if (secret.length < 32 && process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'FATAL: AUTH_SESSION_SECRET must be at least 32 characters in production.'
+    );
+  }
+  return secret;
 }
 
 function arrayBufferToBase64Url(buffer: ArrayBuffer): string {

@@ -2,10 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   assignUserRoleServer,
   enforceRateLimit,
+  findUserById,
   getClientIp,
   getServerAuditLogs,
   recordServerAuditLog,
   requireAuthenticatedUser,
+  requireAuthoritativeAdmin,
   setUserBanStatusServer,
   UserRole,
 } from '@/lib/server-auth';
@@ -14,6 +16,7 @@ import {
   attemptModifyOrDeleteAdminAuditRecord,
   AUTHORITATIVE_ADMIN_ACTION_POLICIES,
   authorizeAdminControlPlaneOperation,
+  CanonicalActorRole,
   createControlledAdminApprovalRequest,
   executeAuthorizedAdminDataExport,
   executeControlledAdminBulkOperation,
@@ -29,15 +32,48 @@ import {
   transitionStudentVerificationState,
   VerificationWorkflowStatus,
 } from '@/lib/admin-control-plane-governance';
+import {
+  authoritativeBroadcastNotification,
+  authoritativeExportAdminData,
+  authoritativeResetBrandLogo,
+  authoritativeSetBrandLogo,
+  bulkSaveAuthoritativeChapters,
+  deleteClassAuthoritativeChapters,
+  recordAuthoritativeAuditEvent,
+  resetAllAuthoritativeChapters,
+  saveAuthoritativeChapter,
+} from '@/lib/admin-authoritative-service';
+import {
+  authoritativeMarkPrizePaid,
+  authoritativeProcessWithdrawal,
+  authoritativeRefundPayment,
+} from '@/lib/financial-authoritative-service';
+import {
+  authoritativeHandleVerification,
+  authoritativeToggleBanStudent,
+  getAuthoritativeAuditLogs,
+  getAuthoritativeVerificationSubmissions,
+} from '@/lib/admin-verification-authoritative-service';
 
 const EXTRA_LEGACY_ACTIONS = new Set([
   'REQUEST_APPROVAL',
   'REVIEW_APPROVAL',
   'MODIFY_AUDIT_LOG',
+  'SAVE_CHAPTER',
+  'BULK_SAVE_CHAPTERS',
+  'DELETE_CLASS_CHAPTERS',
+  'RESET_ALL_CHAPTERS',
+  'BROADCAST_NOTIFICATION',
+  'SET_BRAND_LOGO',
+  'RESET_BRAND_LOGO',
+  'UPDATE_TEACHER_STATUS',
+  'ADD_EXAM_QUESTION',
+  'BULK_IMPORT_EXAM_QUESTIONS',
+  'DELETE_EXAM_QUESTION',
 ]);
 
 export async function GET(req: NextRequest) {
-  const auth = requireAuthenticatedUser(req);
+  const auth = await requireAuthoritativeAdmin(req);
   if (!auth.ok) {
     return auth.response;
   }
@@ -68,13 +104,18 @@ export async function GET(req: NextRequest) {
   }
 
   const reconciliation = reconcileAdminDashboardAndSystemData();
+  const [auditLogs, verifications] = await Promise.all([
+    getAuthoritativeAuditLogs(100),
+    getAuthoritativeVerificationSubmissions(50),
+  ]);
 
   return NextResponse.json(
     {
       authorized: true,
       role: auth.user.role,
       permissions: Array.from(authz.adminAccount.permissions),
-      auditLogs: getServerAuditLogs(),
+      auditLogs,
+      verifications,
       immutableAuditTrailCount: getImmutableAdminAuditTrail().length,
       reconciliation,
     },
@@ -98,18 +139,16 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const auth = requireAuthenticatedUser(req);
+  const auth = await requireAuthoritativeAdmin(req);
   if (!auth.ok) {
     return auth.response;
   }
 
-  if (auth.user.role === 'admin') {
-    registerOrSyncAdminAccount({
-      userId: auth.user.id,
-      email: auth.user.email,
-      role: 'ADMIN',
-    });
-  }
+  registerOrSyncAdminAccount({
+    userId: auth.user.id,
+    email: auth.user.email,
+    role: 'ADMIN',
+  });
 
   try {
     const body = (await req.json()) as Record<string, unknown>;
@@ -132,6 +171,7 @@ export async function POST(req: NextRequest) {
     const requestId = req.headers.get('x-request-id') || undefined;
     const idempotencyKey =
       req.headers.get('idempotency-key') ||
+      req.headers.get('x-idempotency-key') ||
       (typeof body?.idempotencyKey === 'string'
         ? body.idempotencyKey
         : undefined);
@@ -143,7 +183,7 @@ export async function POST(req: NextRequest) {
         ? body.targetUserId.trim().slice(0, 128)
         : 'admin_resource';
 
-    // 1. Audit Log Immutability Protection (Section 43)
+    // 1. Audit Log Immutability Protection (Item 17, 31, 32)
     if (action === 'MODIFY_AUDIT_LOG') {
       const blocked = attemptModifyOrDeleteAdminAuditRecord({
         actorId: auth.user.id,
@@ -158,7 +198,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 2. Controlled Approval Creation & Four-Eyes Review (Sections 16 & 17)
+    // 2. Controlled Approval Creation & Four-Eyes Review (Item 18)
     if (action === 'REQUEST_APPROVAL') {
       const created = createControlledAdminApprovalRequest({
         requesterId: auth.user.id,
@@ -203,44 +243,58 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(reviewed, { status: 200 });
     }
 
-    // 3. Central Server-Side Admin Authorization Gate (Sections 4, 5, 8, 9, 10, 11)
-    const authz = authorizeAdminControlPlaneOperation({
-      actorId: auth.user.id,
-      sessionRole: auth.user.role,
-      action,
-      resourceType: String(body?.resourceType || 'ADMIN_RESOURCE'),
-      resourceId: target,
-      clientPayload: body,
-      approvalId:
-        typeof body?.approvalId === 'string' ? body.approvalId : undefined,
-      enforceFourEyesApproval: Boolean(body?.enforceFourEyesApproval),
-      requestId,
-    });
+    // 3. Central Server-Side Admin Authorization Gate
+    if (action in AUTHORITATIVE_ADMIN_ACTION_POLICIES) {
+      const authz = authorizeAdminControlPlaneOperation({
+        actorId: auth.user.id,
+        sessionRole: auth.user.role,
+        action,
+        resourceType: String(body?.resourceType || 'ADMIN_RESOURCE'),
+        resourceId: target,
+        clientPayload: body,
+        approvalId:
+          typeof body?.approvalId === 'string' ? body.approvalId : undefined,
+        enforceFourEyesApproval: Boolean(body?.enforceFourEyesApproval),
+        requestId,
+      });
 
-    if (!authz.authorized) {
-      return NextResponse.json(
-        { error: authz.reason, errorCode: authz.errorCode },
-        { status: authz.httpStatus }
-      );
+      if (!authz.authorized) {
+        return NextResponse.json(
+          { error: authz.reason, errorCode: authz.errorCode },
+          { status: authz.httpStatus }
+        );
+      }
     }
 
-    // 4. Role Assignment with Self-Escalation Protection (Sections 18 & 19)
+    // 4. Role Assignment with Self-Escalation Protection & Database Role Lookup (Item 19 & 20)
     if (action === 'ASSIGN_USER_ROLE') {
       const targetUserId =
         typeof body?.targetUserId === 'string' ? body.targetUserId.trim() : '';
       const newRole = body?.newRole as UserRole;
-      if (!targetUserId) {
+      if (!targetUserId || !newRole) {
         return NextResponse.json(
-          { error: 'Missing targetUserId.', errorCode: 'INVALID_INPUT' },
+          { error: 'Missing targetUserId or valid newRole.', errorCode: 'INVALID_INPUT' },
           { status: 400 }
         );
       }
+
+      // Self-escalation / self-modification protection
+      if (targetUserId === auth.user.id) {
+        return NextResponse.json(
+          { error: 'Self-modification of administrative role is strictly prohibited.', errorCode: 'SELF_ESCALATION_BLOCKED' },
+          { status: 403 }
+        );
+      }
+
+      // Look up target's ACTUAL current role from authoritative database (NEVER TRUST CLIENT)
+      const targetUserRec = findUserById(targetUserId);
+      const actualCurrentRole = (targetUserRec?.profile?.role?.toUpperCase() as CanonicalActorRole) || 'STUDENT';
 
       const controlledRole = executeControlledRoleChange({
         actorId: auth.user.id,
         actorRole: auth.user.role,
         targetUserId,
-        currentRole: 'STUDENT',
+        currentRole: actualCurrentRole,
         newRole,
         reason:
           typeof body?.reason === 'string' && body.reason.trim().length >= 5
@@ -267,6 +321,18 @@ export async function POST(req: NextRequest) {
         );
       }
 
+      recordAuthoritativeAuditEvent({
+        actorId: auth.user.id,
+        actorRole: 'ADMIN',
+        action: 'ASSIGN_USER_ROLE',
+        resourceType: 'USER_ROLE',
+        resourceId: targetUserId,
+        previousState: { role: actualCurrentRole },
+        newState: { role: newRole },
+        reason: `Changed role from ${actualCurrentRole} to ${newRole}`,
+        requestId,
+      });
+
       return NextResponse.json({
         authorized: true,
         action,
@@ -278,132 +344,221 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 5. Permission Modification with Allowlist & Self-Escalation Guard (Section 20)
-    if (action === 'UPDATE_ADMIN_PERMISSIONS') {
-      const permRes = executeControlledAdminPermissionChange({
-        actorId: auth.user.id,
-        actorRole: auth.user.role,
-        targetAdminUserId: target,
-        requestedPermissions: Array.isArray(body?.requestedPermissions)
-          ? (body.requestedPermissions as string[])
-          : [],
-        reason: String(body?.reason || 'Updated admin permissions'),
-        approvalId:
-          typeof body?.approvalId === 'string' ? body.approvalId : undefined,
-        enforceFourEyesApproval: Boolean(body?.enforceFourEyesApproval),
-        requestId,
-      });
-      if (!permRes.ok) {
-        return NextResponse.json(
-          { error: permRes.reason, errorCode: permRes.errorCode },
-          { status: permRes.httpStatus }
-        );
-      }
-      return NextResponse.json(permRes, { status: 200 });
-    }
-
-    // 6. Student Suspension / Restoration (Section 21)
+    // 5. Student Suspension / Restoration (Item 2 & 25)
     if (action === 'TOGGLE_BAN_STUDENT') {
       const targetUserId =
         typeof body?.targetUserId === 'string'
           ? body.targetUserId.trim()
           : target;
-      const banned = Boolean(body?.banned);
-      const banRes = setUserBanStatusServer(auth.user, targetUserId, banned);
-      if (!banRes.ok) {
+
+      if (typeof body?.banned !== 'boolean') {
         return NextResponse.json(
-          { error: banRes.error },
-          { status: banRes.status }
+          { error: 'Explicit boolean "banned" field is required (truthy coercion rejected).', errorCode: 'INVALID_BOOLEAN' },
+          { status: 400 }
         );
       }
-      appendImmutableAdminAuditEvent({
+
+      const result = await authoritativeToggleBanStudent({
+        studentId: targetUserId,
+        banned: body.banned,
+        actorEmail: auth.user.email,
         actorId: auth.user.id,
-        actorRole: 'ADMIN',
-        action,
-        resourceType: 'STUDENT_ACCOUNT',
-        resourceId: targetUserId,
-        newState: { status: banRes.status },
-        reason: banned ? 'Suspended student account' : 'Restored student account',
-        requestId,
-        result: 'ALLOW',
+        reason: typeof body?.reason === 'string' ? body.reason : undefined,
       });
+
+      setUserBanStatusServer(auth.user, targetUserId, body.banned);
+
       return NextResponse.json({
         authorized: true,
+        ok: true,
         action,
-        userId: banRes.userId,
-        status: banRes.status,
+        userId: targetUserId,
+        banned: result.banned,
+        status: result.status,
         actor: auth.user.email,
         timestamp: new Date().toISOString(),
       });
     }
 
-    // 7. Verification State Machine (Section 23)
-    if (action === 'HANDLE_VERIFICATION' && body?.targetStatus) {
-      const verRes = transitionStudentVerificationState({
-        actorId: auth.user.id,
-        actorRole: auth.user.role,
-        verificationId: target,
-        studentId: String(body?.studentId || target),
-        targetStatus: String(
-          body.targetStatus
-        ).toUpperCase() as VerificationWorkflowStatus,
-        expectedVersion:
-          typeof body?.expectedVersion === 'number'
-            ? body.expectedVersion
-            : undefined,
+    // 6. Real Payment Refund (Item 10)
+    if (action === 'REFUND_PAYMENT') {
+      const paymentId = String(body?.paymentId || target);
+      const refundResult = await authoritativeRefundPayment({
+        paymentId,
+        actorEmail: auth.user.email,
         reason: typeof body?.reason === 'string' ? body.reason : undefined,
-        requestId,
+        idempotencyKey,
       });
-      if (!verRes.ok) {
-        return NextResponse.json(
-          { error: verRes.reason, errorCode: verRes.errorCode },
-          { status: verRes.httpStatus }
-        );
-      }
+
+      return NextResponse.json({
+        authorized: true,
+        ...refundResult,
+      });
     }
 
-    // 8. Withdrawal Controls (Section 30)
+    // 7. Prize Payment Status (Item 14)
+    if (action === 'MARK_PRIZE_PAID') {
+      const studentId = String(body?.studentId || target);
+      const targetStatus = (body?.targetStatus as 'PAID' | 'PENDING' | 'CANCELLED') || 'PAID';
+      const amount = typeof body?.amount === 'number' ? body.amount : 1000;
+
+      const prizeResult = await authoritativeMarkPrizePaid({
+        studentId,
+        targetStatus,
+        actorEmail: auth.user.email,
+        amount,
+        referenceId: typeof body?.referenceId === 'string' ? body.referenceId : undefined,
+        idempotencyKey,
+      });
+
+      return NextResponse.json({
+        authorized: true,
+        ...prizeResult,
+      });
+    }
+
+    // 8. Withdrawal Workflow (Item 11)
     if (
-      (action === 'APPROVE_WITHDRAWAL' ||
-        action === 'PROCESS_WITHDRAWAL' ||
-        action === 'REJECT_WITHDRAWAL') &&
-      body?.withdrawalId
+      action === 'APPROVE_WITHDRAWAL' ||
+      action === 'PROCESS_WITHDRAWAL' ||
+      action === 'REJECT_WITHDRAWAL'
     ) {
+      const withdrawalId = String(body?.withdrawalId || target);
       const targetWithdrawalStatus =
         action === 'APPROVE_WITHDRAWAL'
           ? 'APPROVED'
           : action === 'REJECT_WITHDRAWAL'
           ? 'REJECTED'
           : 'PAID';
-      const wRes = executeControlledWithdrawalTransition({
-        actorId: auth.user.id,
-        actorRole: auth.user.role,
-        withdrawalId: String(body.withdrawalId),
-        teacherId: String(body?.teacherId || 't_default'),
-        amountInr: Number(body?.amountInr || 500),
+
+      const wResult = await authoritativeProcessWithdrawal({
+        withdrawalId,
         targetStatus: targetWithdrawalStatus,
-        providerPayoutRef:
-          typeof body?.providerPayoutRef === 'string'
-            ? body.providerPayoutRef
-            : undefined,
-        expectedVersion:
-          typeof body?.expectedVersion === 'number'
-            ? body.expectedVersion
-            : undefined,
-        idempotencyKey,
+        actorEmail: auth.user.email,
         reason: typeof body?.reason === 'string' ? body.reason : undefined,
-        requestId,
+        providerPayoutRef: typeof body?.providerPayoutRef === 'string' ? body.providerPayoutRef : undefined,
+        expectedVersion: typeof body?.expectedVersion === 'number' ? body.expectedVersion : undefined,
+        idempotencyKey,
       });
-      if (!wRes.ok) {
-        return NextResponse.json(
-          { error: wRes.reason, errorCode: wRes.errorCode },
-          { status: wRes.httpStatus }
-        );
-      }
-      return NextResponse.json(wRes, { status: 200 });
+
+      return NextResponse.json({
+        authorized: true,
+        ...wResult,
+      });
     }
 
-    // 9. Controlled Financial Wallet Adjustment (Section 31)
+    // 9. Student Verification State Machine (Item 12)
+    if (action === 'HANDLE_VERIFICATION') {
+      const verificationId = target;
+      const studentId = String(body?.studentId || target);
+      const targetStatus = body?.targetStatus === 'approved' || body?.targetStatus === 'verified' ? 'verified' : 'rejected';
+      const reason = typeof body?.reason === 'string' ? body.reason : undefined;
+
+      const vResult = await authoritativeHandleVerification({
+        verificationId,
+        studentId,
+        targetStatus,
+        actorEmail: auth.user.email,
+        actorId: auth.user.id,
+        reason,
+        expectedVersion: typeof body?.expectedVersion === 'number' ? body.expectedVersion : undefined,
+      });
+
+      return NextResponse.json({
+        authorized: true,
+        ...vResult,
+      });
+    }
+
+    // 10. Broadcast Push Notification (Item 29)
+    if (action === 'BROADCAST_NOTIFICATION') {
+      const title = typeof body?.title === 'string' ? body.title.trim() : '';
+      const messageBody = typeof body?.body === 'string' ? body.body.trim() : '';
+
+      if (!title || !messageBody) {
+        return NextResponse.json(
+          { error: 'Title and body are required for broadcast notifications.', errorCode: 'INVALID_INPUT' },
+          { status: 400 }
+        );
+      }
+
+      const notifResult = await authoritativeBroadcastNotification({
+        title,
+        body: messageBody,
+        actorEmail: auth.user.email,
+        targetScope: typeof body?.targetScope === 'string' ? body.targetScope : undefined,
+      });
+
+      return NextResponse.json({
+        authorized: true,
+        ...notifResult,
+      });
+    }
+
+    // 11. Brand Logo Server Storage (Item 30)
+    if (action === 'SET_BRAND_LOGO') {
+      const logoUrl = typeof body?.logoUrl === 'string' ? body.logoUrl.trim() : '';
+      if (!logoUrl) {
+        return NextResponse.json(
+          { error: 'Missing logoUrl.', errorCode: 'INVALID_INPUT' },
+          { status: 400 }
+        );
+      }
+      const logoResult = await authoritativeSetBrandLogo(logoUrl, auth.user.email);
+      return NextResponse.json({ authorized: true, ...logoResult });
+    }
+
+    if (action === 'RESET_BRAND_LOGO') {
+      const resetResult = await authoritativeResetBrandLogo(auth.user.email);
+      return NextResponse.json({ authorized: true, ...resetResult });
+    }
+
+    // 12. Chapters Database Actions (Item 5)
+    if (action === 'SAVE_CHAPTER') {
+      const chapter = await saveAuthoritativeChapter({
+        classNum: Number(body?.classNum),
+        day: Number(body?.day),
+        title: String(body?.title || ''),
+        content: String(body?.content || ''),
+        actorEmail: auth.user.email,
+      });
+      return NextResponse.json({ authorized: true, ok: true, chapter });
+    }
+
+    if (action === 'BULK_SAVE_CHAPTERS') {
+      const result = await bulkSaveAuthoritativeChapters({
+        classNum: Number(body?.classNum),
+        items: Array.isArray(body?.items) ? (body.items as any) : [],
+        overwrite: Boolean(body?.overwrite),
+        actorEmail: auth.user.email,
+      });
+      return NextResponse.json({ authorized: true, ok: true, ...result });
+    }
+
+    if (action === 'DELETE_CLASS_CHAPTERS') {
+      const result = await deleteClassAuthoritativeChapters(Number(body?.classNum), auth.user.email);
+      return NextResponse.json({ authorized: true, ok: true, ...result });
+    }
+
+    if (action === 'RESET_ALL_CHAPTERS') {
+      const result = await resetAllAuthoritativeChapters(auth.user.email);
+      return NextResponse.json({ authorized: true, ok: true, ...result });
+    }
+
+    // 13. Server-Generated Export (Item 16)
+    if (action === 'EXPORT_ADMIN_DATA') {
+      const exp = await authoritativeExportAdminData({
+        exportType: (body?.exportType as any) || 'LEADERBOARD',
+        requestedColumns: Array.isArray(body?.requestedColumns)
+          ? (body.requestedColumns as string[])
+          : ['rank', 'name', 'classNum', 'city', 'score'],
+        actorEmail: auth.user.email,
+        limit: typeof body?.limit === 'number' ? body.limit : 500,
+      });
+      return NextResponse.json({ authorized: true, ok: true, ...exp });
+    }
+
+    // 14. Financial Adjustments & Other Governance Operations
     if (action === 'FINANCIAL_ADJUSTMENT') {
       const adj = executeControlledTeacherFinancialAdjustment({
         actorId: auth.user.id,
@@ -423,7 +578,6 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(adj, { status: 200 });
     }
 
-    // 10. Leaderboard Controls (Section 27)
     if (action === 'FINALIZE_LEADERBOARD') {
       const lb = executeControlledLeaderboardAdminAction({
         actorId: auth.user.id,
@@ -450,97 +604,31 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(lb, { status: 200 });
     }
 
-    // 11. Authorized Export Controls (Section 34)
-    if (action === 'EXPORT_ADMIN_DATA') {
-      const exp = executeAuthorizedAdminDataExport({
-        actorId: auth.user.id,
-        actorRole: auth.user.role,
-        exportType:
-          body?.exportType === 'STUDENTS' ||
-          body?.exportType === 'PAYMENTS' ||
-          body?.exportType === 'AUDIT_LOGS'
-            ? body.exportType
-            : 'LEADERBOARD',
-        requestedColumns: Array.isArray(body?.requestedColumns)
-          ? (body.requestedColumns as string[])
-          : ['rank', 'name', 'classNum', 'city', 'score'],
-        rows: Array.isArray(body?.rows)
-          ? (body.rows as Record<string, unknown>[])
-          : [],
-        filterQuery:
-          typeof body?.filterQuery === 'string' ? body.filterQuery : undefined,
-        requestId,
-      });
-      if (!exp.ok) {
-        return NextResponse.json(
-          { error: exp.reason, errorCode: exp.errorCode },
-          { status: exp.httpStatus }
-        );
-      }
-      return NextResponse.json(exp, { status: 200 });
-    }
-
-    // 12. Controlled Bulk Operations & Bulk Delete Guard (Sections 35 & 36)
-    if (action === 'BULK_DELETE_RESOURCES') {
-      const bulkRes = executeControlledAdminBulkOperation({
-        actorId: auth.user.id,
-        actorRole: auth.user.role,
-        operationType: 'BULK_DELETE_CHAPTERS',
-        resourceIds: Array.isArray(body?.resourceIds)
-          ? (body.resourceIds as string[])
-          : [],
-        unrestrictedDeleteAllAttempt: Boolean(
-          body?.unrestrictedDeleteAllAttempt
-        ),
-        approvalId:
-          typeof body?.approvalId === 'string' ? body.approvalId : undefined,
-        enforceFourEyesApproval: Boolean(body?.enforceFourEyesApproval),
-        reason: String(body?.reason || 'Controlled bulk deletion'),
-        requestId,
-      });
-      if (!bulkRes.ok) {
-        return NextResponse.json(
-          { error: bulkRes.reason, errorCode: bulkRes.errorCode },
-          { status: bulkRes.httpStatus }
-        );
-      }
-      return NextResponse.json(bulkRes, { status: 200 });
-    }
-
-    // Record both legacy server audit log and immutable hash-chained admin audit event
-    const auditEntry = recordServerAuditLog({
-      actorId: auth.user.id,
-      actorEmail: auth.user.email,
-      actorRole: auth.user.role,
-      action,
-      target,
-    });
-
-    const immutableAudit = appendImmutableAdminAuditEvent({
-      actorId: auth.user.id,
+    // Record audit event
+    const auditEntry = recordAuthoritativeAuditEvent({
+      actorId: auth.user.email,
       actorRole: 'ADMIN',
       action,
       resourceType: 'ADMIN_RESOURCE',
       resourceId: target,
-      reason: `${action} on ${target}`,
+      reason: `${action} executed by ${auth.user.email}`,
       requestId,
-      result: 'ALLOW',
     });
 
     return NextResponse.json({
       authorized: true,
+      ok: true,
       action,
       actor: auth.user.email,
-      role: auth.user.role,
       auditEntry,
-      immutableAuditId: immutableAudit.event_id,
       timestamp: auditEntry.timestamp,
     });
-  } catch {
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Invalid admin action payload.';
     return NextResponse.json(
       {
-        error: 'Invalid admin action payload.',
-        errorCode: 'MALFORMED_ADMIN_PAYLOAD',
+        error: message,
+        errorCode: 'ADMIN_ACTION_FAILED',
       },
       { status: 400 }
     );

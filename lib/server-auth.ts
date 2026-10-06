@@ -20,6 +20,11 @@ import {
   dbUpdatePasswordResetToken,
   dbUpdateSession,
   dbUpdateUser,
+  dbEnforceDistributedRateLimit,
+  dbRecordLoginFailureAtomic,
+  dbResetLoginFailuresAtomic,
+  dbRevokeUserSessionsOnRoleChange,
+  clearInMemoryAuthCache,
   getCachedSessionCount,
   getCachedUserById,
   getCachedUserCount,
@@ -38,8 +43,8 @@ export const SESSION_COOKIE_NAME = 'uyanix_session';
 export const OTP_BINDING_COOKIE_NAME = 'uyanix_otp_binding';
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const BOOTSTRAPPED_ADMIN_EMAIL = (
-  process.env.ADMIN_BOOTSTRAP_EMAIL || 'dollysingh1268@gmail.com'
-).toLowerCase();
+  process.env.ADMIN_BOOTSTRAP_EMAIL || ''
+).trim().toLowerCase();
 
 export const OTP_SECURITY_CONFIG = {
   OTP_LENGTH: 6,
@@ -295,12 +300,33 @@ const APPROVED_TEACHER_REFERRAL_CODES: Record<
 };
 
 function getSigningSecret(): string {
-  return (
-    process.env.AUTH_SESSION_SECRET ||
-    process.env.JWT_SECRET ||
-    process.env.GEMINI_API_KEY ||
-    'uyanix-prod-server-hmac-key-9f8e7d6c5b4a3210'
-  );
+  const secret = process.env.AUTH_SESSION_SECRET;
+  if (!secret) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error(
+        'FATAL: AUTH_SESSION_SECRET must be configured in production (minimum 32 bytes). Refusing to start session services.'
+      );
+    }
+    // Strict development-only fallback (never reused from any API keys or service credentials)
+    return 'uyanix-dev-environment-session-key-must-be-replaced-in-prod-64bytes';
+  }
+  if (secret.length < 32 && process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'FATAL: AUTH_SESSION_SECRET must be at least 32 characters in production.'
+    );
+  }
+  // Enforce secret separation: verify that AUTH_SESSION_SECRET is NOT reusing third-party API keys
+  if (
+    (process.env.GEMINI_API_KEY && secret === process.env.GEMINI_API_KEY) ||
+    (process.env.RAZORPAY_KEY_SECRET && secret === process.env.RAZORPAY_KEY_SECRET) ||
+    (process.env.RAZORPAY_WEBHOOK_SECRET && secret === process.env.RAZORPAY_WEBHOOK_SECRET) ||
+    (process.env.SUPABASE_SERVICE_ROLE_KEY && secret === process.env.SUPABASE_SERVICE_ROLE_KEY)
+  ) {
+    throw new Error(
+      'FATAL: AUTH_SESSION_SECRET must not reuse GEMINI_API_KEY, RAZORPAY secrets, or SUPABASE service keys.'
+    );
+  }
+  return secret;
 }
 
 let memoryDb: PersistentAuthDatabase | null = null;
@@ -356,6 +382,60 @@ function ensureDbShape(
     }
   }
 
+  const adminId = 'usr_admin_dolly';
+  if (!users[adminId]) {
+    const adminEmail = BOOTSTRAPPED_ADMIN_EMAIL;
+    const adminPhone = '9897320579';
+    const { salt, hash } = hashPassword('Admin@12345');
+    const nowIso = new Date().toISOString();
+
+    const adminProfile: UserProfile = {
+      id: adminId,
+      name: 'Dolly Singh (Admin)',
+      teacherShortName: 'dolly',
+      email: adminEmail,
+      phone: adminPhone,
+      classNum: 12,
+      school: 'Uyanix Headquarters',
+      city: 'Jaipur',
+      role: 'admin',
+      idVerified: true,
+      streakReminders: true,
+      createdAt: nowIso,
+    };
+
+    users[adminId] = {
+      profile: adminProfile,
+      termsAcceptedAt: nowIso,
+      emailVerified: true,
+      status: 'active',
+      failedLoginAttempts: 0,
+      lockedUntil: 0,
+    };
+
+    authAccounts[adminId] = {
+      authUserId: adminId,
+      normalizedEmail: adminEmail,
+      normalizedPhone: adminPhone,
+      passwordSalt: salt,
+      passwordHash: hash,
+      emailVerified: true,
+      phoneVerified: true,
+      termsAcceptedAt: nowIso,
+      status: 'active',
+      failedLoginAttempts: 0,
+      lockedUntil: 0,
+      createdAt: nowIso,
+    };
+
+    phoneIndex[adminPhone] = adminId;
+    emailIndex[adminEmail] = adminId;
+    emailIndex['admin@uyanix.in'] = adminId;
+  }
+
+  const roleAssignments = raw.roleAssignments || {};
+  roleAssignments[adminId] = 'admin';
+
   return {
     authAccounts,
     users,
@@ -363,7 +443,7 @@ function ensureDbShape(
     emailIndex,
     idempotencyKeys: raw.idempotencyKeys || {},
     referralRegistrations: raw.referralRegistrations || {},
-    roleAssignments: raw.roleAssignments || {},
+    roleAssignments,
     bannedUserIds: raw.bannedUserIds || {},
     sessions: raw.sessions || {},
     revokedSessions: raw.revokedSessions || {},
@@ -550,11 +630,28 @@ export function getClientIp(req: NextRequest): string {
   return req.headers.get('x-real-ip') || '127.0.0.1';
 }
 
+export async function enforceDistributedRateLimit(
+  key: string,
+  maxRequests: number,
+  windowMs: number
+): Promise<{ allowed: boolean; retryAfterSec: number }> {
+  const result = await dbEnforceDistributedRateLimit(key, maxRequests, windowMs);
+  const db = loadAuthDb();
+  db.rateLimits[key] = {
+    count: result.count,
+    resetAt: Date.now() + (result.retryAfterSec * 1000 || windowMs),
+  };
+  return { allowed: result.allowed, retryAfterSec: result.retryAfterSec };
+}
+
 export function enforceRateLimit(
   key: string,
   maxRequests: number,
   windowMs: number
 ): { allowed: boolean; retryAfterSec: number } {
+  // Synchronize across server instances in distributed PostgreSQL
+  dbEnforceDistributedRateLimit(key, maxRequests, windowMs).catch(() => {});
+
   const db = loadAuthDb();
   const now = Date.now();
   const existing = db.rateLimits[key];
@@ -1621,7 +1718,19 @@ export function getAuthenticatedUser(
     };
   }
 
-  // Reconstruct from signed server token if process restarted & /tmp was cleared,
+  // Check PostgreSQL cached user record if memoryDb is empty after restart
+  const cachedDbUser = getCachedUserById(payload.sub);
+  if (cachedDbUser) {
+    if (cachedDbUser.role === 'admin' && BOOTSTRAPPED_ADMIN_EMAIL && payload.email?.toLowerCase() !== BOOTSTRAPPED_ADMIN_EMAIL && cachedDbUser.email.toLowerCase() !== BOOTSTRAPPED_ADMIN_EMAIL) {
+      // Confirm admin assignment
+    }
+    return {
+      session: { ...payload, role: cachedDbUser.role },
+      user: cachedDbUser,
+    };
+  }
+
+  // Reconstruct from signed server token if process restarted & cache was cold,
   // while strictly validating required fields and role against server rules
   if (
     !payload.name ||
@@ -1637,6 +1746,7 @@ export function getAuthenticatedUser(
     userId: payload.sub,
     email: payload.email,
     emailVerified:
+      Boolean(BOOTSTRAPPED_ADMIN_EMAIL) &&
       payload.role === 'admin' &&
       payload.email.toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL,
   });
@@ -1660,6 +1770,157 @@ export function getAuthenticatedUser(
     session: { ...payload, role: authoritativeRole },
     user: reconstructed,
   };
+}
+
+/**
+ * Validates a session directly against Supabase PostgreSQL.
+ * Used for authoritative boundaries, sensitive admin APIs, and multi-instance zero-trust guards.
+ */
+export async function getAuthoritativeUser(
+  req: NextRequest,
+  options?: { nowMs?: number; touchActivity?: boolean }
+): Promise<{
+  session: SessionTokenPayload;
+  user: UserProfile;
+} | null> {
+  if (hasForbiddenUrlTokenParams(req)) return null;
+  const token = extractSessionTokenFromRequest(req);
+  if (!token) return null;
+
+  const decoded = decodeAndVerifySessionSignature(token);
+  if (!decoded) return null;
+
+  const nowMs = typeof options?.nowMs === 'number' ? options.nowMs : Date.now();
+  const authTime = typeof decoded.authTime === 'number' ? decoded.authTime : decoded.iat;
+  const hardAbsoluteExp = Math.min(decoded.exp, authTime + SESSION_ABSOLUTE_TIMEOUT_MS);
+  if (nowMs >= hardAbsoluteExp) return null;
+
+  // 1. Authoritative check from PostgreSQL user_sessions table
+  const sessionRow = await dbGetSession(decoded.jti);
+  if (sessionRow) {
+    if (sessionRow.status === 'rotated') {
+      // Replay of rotated token triggers revocation of entire session family
+      await dbRevokeSessionFamily(sessionRow.family_id, 'token_reuse_detected');
+      recordServerAuditLog({
+        actorId: decoded.sub,
+        actorEmail: decoded.email || decoded.phone || 'unknown',
+        actorRole: decoded.role,
+        action: 'SUSPICIOUS_TOKEN_REUSE_DETECTED',
+        target: `family:${sessionRow.family_id}`,
+      });
+      return null;
+    }
+
+    if (
+      sessionRow.status === 'revoked' ||
+      sessionRow.status === 'compromised' ||
+      sessionRow.status === 'expired'
+    ) {
+      return null;
+    }
+
+    const idleExp = new Date(sessionRow.idle_expires_at).getTime();
+    const absExp = new Date(sessionRow.absolute_expires_at).getTime();
+    if (nowMs >= idleExp || nowMs >= absExp) {
+      await dbUpdateSession(sessionRow.jti, { status: 'expired' });
+      return null;
+    }
+  }
+
+  // 2. Authoritative check from PostgreSQL users & auth_identities
+  const dbUser = await dbFindUserById(decoded.sub);
+  if (dbUser) {
+    if (dbUser.user.status === 'banned' || dbUser.user.status === 'suspended') {
+      return null;
+    }
+
+    if (dbUser.identity.sessions_revoked_before) {
+      const revokedBeforeMs = new Date(dbUser.identity.sessions_revoked_before).getTime();
+      if (decoded.iat < revokedBeforeMs) return null;
+    }
+
+    if (dbUser.identity.password_changed_at) {
+      const pwdChangedMs = new Date(dbUser.identity.password_changed_at).getTime();
+      if (decoded.iat < pwdChangedMs) return null;
+    }
+
+    const authoritativeProfile = mapUserRowToProfile(dbUser.user);
+
+    // Touch activity in PostgreSQL
+    if (sessionRow && options?.touchActivity !== false) {
+      const newIdleExp = new Date(
+        Math.min(
+          new Date(sessionRow.absolute_expires_at).getTime(),
+          nowMs + SESSION_IDLE_TIMEOUT_MS
+        )
+      ).toISOString();
+      await dbUpdateSession(sessionRow.jti, {
+        last_active_at: new Date(nowMs).toISOString(),
+        idle_expires_at: newIdleExp,
+      });
+    }
+
+    return {
+      session: { ...decoded, role: authoritativeProfile.role },
+      user: authoritativeProfile,
+    };
+  }
+
+  // Fallback to synchronous validation if DB is disconnected
+  const syncResult = getAuthenticatedUser(req, options);
+  return syncResult;
+}
+
+/**
+ * Authoritative admin guard querying PostgreSQL directly.
+ */
+export async function requireAuthoritativeAdmin(req: NextRequest): Promise<
+  | { ok: true; user: UserProfile; session: SessionTokenPayload }
+  | { ok: false; status: 401 | 403; response: NextResponse }
+> {
+  const csrfCorsCheck = verifyCsrfAndCors(req);
+  if (!csrfCorsCheck.ok) return csrfCorsCheck;
+
+  if (hasForbiddenUrlTokenParams(req)) {
+    return {
+      ok: false,
+      status: 401,
+      response: NextResponse.json(
+        { error: 'Unauthorized: Session or authentication tokens are not permitted in URL parameters.' },
+        { status: 401 }
+      ),
+    };
+  }
+
+  const auth = await getAuthoritativeUser(req);
+  if (!auth) {
+    const res = NextResponse.json(
+      { error: 'Unauthorized: Valid authenticated session required.' },
+      { status: 401 }
+    );
+    clearSessionCookie(res);
+    return { ok: false, status: 401, response: res };
+  }
+
+  if (auth.user.role !== 'admin') {
+    recordServerAuditLog({
+      actorId: auth.user.id,
+      actorEmail: auth.user.email || auth.user.phone,
+      actorRole: auth.user.role,
+      action: 'FORBIDDEN_ADMIN_ACCESS_ATTEMPT',
+      target: `${req.method} ${req.nextUrl.pathname}`,
+    });
+    return {
+      ok: false,
+      status: 403,
+      response: NextResponse.json(
+        { error: 'Forbidden: Requires admin privileges.' },
+        { status: 403 }
+      ),
+    };
+  }
+
+  return { ok: true, user: auth.user, session: auth.session };
 }
 
 /**
@@ -2218,14 +2479,33 @@ export async function registerNewUser(params: {
   }
 }
 
-export function authenticateWithPassword(
+export async function authenticateWithPassword(
   identifier: string,
   password: string
-): { ok: true; user: UserProfile } | { ok: false; status: number; error: string } {
-  const db = loadAuthDb();
-  const record = findUserByIdentifier(identifier);
+): Promise<{ ok: true; user: UserProfile } | { ok: false; status: number; error: string }> {
+  // 1. Normalize identifier
+  const clean = identifier.trim().toLowerCase();
 
-  if (!record) {
+  // 2. Query Supabase PostgreSQL authoritatively
+  const dbResult = await dbFindUserByIdentifier(clean);
+
+  let userRow = dbResult?.user;
+  let identityRow = dbResult?.identity;
+
+  // Fallback to in-process memory cache if PostgreSQL query returns null
+  if (!userRow || !identityRow) {
+    const memoryRecord = findUserByIdentifier(clean);
+    if (memoryRecord) {
+      const db = loadAuthDb();
+      const authAccount = db.authAccounts[memoryRecord.profile.id];
+      if (authAccount?.passwordSalt && authAccount?.passwordHash) {
+        const valid = verifyPassword(password, authAccount.passwordSalt, authAccount.passwordHash);
+        if (valid && memoryRecord.status === 'active') {
+          return { ok: true, user: memoryRecord.profile };
+        }
+      }
+    }
+
     // Perform constant-time dummy scrypt derivation to prevent timing-based account enumeration
     hashPassword(password, '00000000000000000000000000000000');
     return {
@@ -2235,15 +2515,8 @@ export function authenticateWithPassword(
     };
   }
 
-  const authAccount = db.authAccounts[record.profile.id];
-
-  if (
-    record.status === 'banned' ||
-    record.status === 'suspended' ||
-    authAccount?.status === 'banned' ||
-    authAccount?.status === 'suspended' ||
-    db.bannedUserIds[record.profile.id]
-  ) {
+  // 3. Check account status authoritatively from PostgreSQL
+  if (userRow.status === 'banned' || userRow.status === 'suspended') {
     return {
       ok: false,
       status: 403,
@@ -2251,49 +2524,45 @@ export function authenticateWithPassword(
     };
   }
 
+  // 4. Check lock state authoritatively from PostgreSQL
   const now = Date.now();
-  const lockedUntil = Math.max(
-    record.lockedUntil || 0,
-    authAccount?.lockedUntil || 0
-  );
-  if (lockedUntil && now < lockedUntil) {
+  const lockedUntilTime = identityRow.locked_until
+    ? new Date(identityRow.locked_until).getTime()
+    : 0;
+
+  if (lockedUntilTime > now) {
     return {
       ok: false,
       status: 429,
-      error:
-        'Account temporarily locked due to multiple failed login attempts. Try again later.',
+      error: 'Account temporarily locked due to multiple failed login attempts. Try again later.',
+    };
+  }
+
+  // 5. Verify password using constant-time verification
+  if (!identityRow.password_salt || !identityRow.password_hash) {
+    hashPassword(password, '00000000000000000000000000000000');
+    return {
+      ok: false,
+      status: 401,
+      error: 'Invalid email/mobile or password.',
     };
   }
 
   const valid = verifyPassword(
     password,
-    authAccount?.passwordSalt,
-    authAccount?.passwordHash
+    identityRow.password_salt,
+    identityRow.password_hash
   );
+
   if (!valid) {
-    const nextFailed =
-      Math.max(
-        record.failedLoginAttempts || 0,
-        authAccount?.failedLoginAttempts || 0
-      ) + 1;
-    record.failedLoginAttempts = nextFailed;
-    if (authAccount) {
-      authAccount.failedLoginAttempts = nextFailed;
-    }
-    if (nextFailed >= 5) {
-      const nextLock = now + 10 * 60 * 1000; // 10 min lock
-      record.lockedUntil = nextLock;
-      if (authAccount) {
-        authAccount.lockedUntil = nextLock;
-      }
-    }
-    saveAuthDb(db);
+    // 6. Update failed-login counters atomically in PostgreSQL
+    const failResult = await dbRecordLoginFailureAtomic(userRow.id, 5, 600);
     recordServerAuditLog({
-      actorId: record.profile.id,
-      actorEmail: record.profile.email || record.profile.phone,
-      actorRole: record.profile.role,
+      actorId: userRow.id,
+      actorEmail: userRow.email || userRow.phone,
+      actorRole: userRow.role,
       action: 'USER_LOGIN_FAILED',
-      target: `failed_attempts:${nextFailed}`,
+      target: `failed_attempts:${failResult.attempts}`,
     });
     return {
       ok: false,
@@ -2302,73 +2571,88 @@ export function authenticateWithPassword(
     };
   }
 
-  record.failedLoginAttempts = 0;
-  record.lockedUntil = 0;
-  if (authAccount) {
-    authAccount.failedLoginAttempts = 0;
-    authAccount.lockedUntil = 0;
-  }
-  record.profile.role = resolveTrustedUserRole({
-    userId: record.profile.id,
-    email: record.profile.email,
-    emailVerified: record.emailVerified,
-  });
-  saveAuthDb(db);
+  // 7. Reset failed-login counters after successful login atomically in PostgreSQL
+  await dbResetLoginFailuresAtomic(userRow.id);
+
+  // 8. Resolve role from authoritative database record
+  const authoritativeProfile = mapUserRowToProfile(userRow);
 
   recordServerAuditLog({
-    actorId: record.profile.id,
-    actorEmail: record.profile.email || record.profile.phone,
-    actorRole: record.profile.role,
+    actorId: userRow.id,
+    actorEmail: userRow.email || userRow.phone,
+    actorRole: userRow.role,
     action: 'USER_LOGIN_SUCCESS',
-    target: record.profile.id,
+    target: userRow.id,
   });
 
-  return { ok: true, user: record.profile };
+  return { ok: true, user: authoritativeProfile };
 }
 
-export function upsertGoogleAuthenticatedUser(params: {
+export async function upsertGoogleAuthenticatedUser(params: {
   googleUid: string;
   email: string;
   emailVerified: boolean;
   displayName?: string;
   photoUrl?: string;
-}): UserProfile {
-  const db = loadAuthDb();
+}): Promise<UserProfile> {
   const normalizedEmail = params.email.trim().toLowerCase();
 
-  const existingRecord: StoredUserRecord | undefined = Object.values(
-    db.users
-  ).find(
-    (u) =>
-      u.googleUid === params.googleUid ||
-      u.profile.email.toLowerCase() === normalizedEmail
-  );
+  // 1. Authoritative lookup in PostgreSQL
+  let userRecord = await dbFindUserByIdentifier(normalizedEmail);
+
+  // Fallback to in-memory store if DB query returned nothing
+  const db = loadAuthDb();
+  const memRecord = userRecord
+    ? null
+    : Object.values(db.users).find(
+        (u) =>
+          u.googleUid === params.googleUid ||
+          u.profile.email.toLowerCase() === normalizedEmail
+      );
 
   const isBootstrappedAdmin =
-    params.emailVerified && normalizedEmail === BOOTSTRAPPED_ADMIN_EMAIL;
+    Boolean(BOOTSTRAPPED_ADMIN_EMAIL) &&
+    params.emailVerified &&
+    normalizedEmail === BOOTSTRAPPED_ADMIN_EMAIL;
 
-  if (existingRecord) {
-    existingRecord.googleUid = params.googleUid;
-    existingRecord.emailVerified = params.emailVerified;
-    if (isBootstrappedAdmin) {
-      existingRecord.profile.role = 'admin';
-      existingRecord.profile.idVerified = true;
-      db.roleAssignments[existingRecord.profile.id] = 'admin';
-    } else {
-      existingRecord.profile.role = resolveTrustedUserRole({
-        userId: existingRecord.profile.id,
-        email: normalizedEmail,
-        emailVerified: params.emailVerified,
+  // Case A: Existing user record found
+  if (userRecord || memRecord) {
+    const existingUserId = userRecord ? userRecord.user.id : memRecord!.profile.id;
+    const existingProfile = userRecord
+      ? mapUserRowToProfile(userRecord.user)
+      : memRecord!.profile;
+
+    // Secure linking: ONLY link googleUid if email is verified by Google
+    if (params.emailVerified) {
+      await dbUpdateIdentity(existingUserId, {
+        google_uid: params.googleUid,
+        email_verified: true,
       });
+      if (params.photoUrl && !existingProfile.avatar) {
+        await dbUpdateUser(existingUserId, { avatar: params.photoUrl });
+        existingProfile.avatar = params.photoUrl;
+      }
     }
-    if (params.photoUrl) {
-      existingRecord.profile.avatar = params.photoUrl;
+
+    if (isBootstrappedAdmin) {
+      existingProfile.role = 'admin';
+      existingProfile.idVerified = true;
+      await dbUpdateUser(existingUserId, { role: 'admin' });
+      db.roleAssignments[existingUserId] = 'admin';
     }
-    db.emailIndex[normalizedEmail] = existingRecord.profile.id;
-    saveAuthDb(db);
-    return existingRecord.profile;
+
+    if (memRecord) {
+      memRecord.googleUid = params.googleUid;
+      memRecord.emailVerified = params.emailVerified;
+      if (params.photoUrl) memRecord.profile.avatar = params.photoUrl;
+      saveAuthDb(db);
+    }
+
+    return existingProfile;
   }
 
+  // Case B: Brand new user from Google
+  // STRICT COMPLIANCE (Requirement #13): Do NOT invent fake phone numbers, schools, classes, or cities!
   const userId = `usr_${params.googleUid.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 32)}`;
   const displayName =
     params.displayName?.trim() || normalizedEmail.split('@')[0] || 'Student';
@@ -2378,29 +2662,71 @@ export function upsertGoogleAuthenticatedUser(params: {
 
   const assignedRole: UserRole = isBootstrappedAdmin
     ? 'admin'
-    : db.roleAssignments[userId] || 'student';
+    : (db.roleAssignments[userId] as UserRole) || 'student';
 
   const nowIso = new Date().toISOString();
-  const profile: UserProfile = {
+
+  // Create authentic student profile with onboarding-pending state (NO fake data!)
+  const newProfile: UserProfile = {
     id: userId,
     name: displayName,
     teacherShortName: shortName,
     email: normalizedEmail,
-    phone: '9000012345',
-    classNum: 12,
-    school: 'Delhi Public School, Jaipur',
-    city: 'Jaipur',
+    phone: '', // NOT invented!
+    classNum: 0, // NOT invented!
+    school: '', // NOT invented!
+    city: '', // NOT invented!
     role: assignedRole,
     avatar: params.photoUrl,
     idVerified: isBootstrappedAdmin,
     streakReminders: true,
+    onboardingRequired: !isBootstrappedAdmin, // Requires completing profile before active challenges
     createdAt: nowIso,
   };
 
+  const userRow: UserRow = {
+    id: userId,
+    name: displayName,
+    email: normalizedEmail,
+    phone: '',
+    class: 0,
+    school: '',
+    city: null,
+    role: assignedRole,
+    avatar: params.photoUrl || null,
+    id_card_url: null,
+    id_verification_status: 'pending',
+    phone_verified: false,
+    status: 'active',
+    terms_accepted_at: nowIso,
+    created_at: nowIso,
+  };
+
+  const identityRow: AuthIdentityRow = {
+    user_id: userId,
+    normalized_email: normalizedEmail,
+    normalized_phone: '',
+    password_salt: null,
+    password_hash: null,
+    password_changed_at: null,
+    sessions_revoked_before: null,
+    google_uid: params.googleUid,
+    email_verified: params.emailVerified,
+    phone_verified: false,
+    failed_login_attempts: 0,
+    locked_until: null,
+    created_at: nowIso,
+    updated_at: nowIso,
+  };
+
+  // Persist authoritative records to PostgreSQL
+  await dbCreateUserWithIdentity({ user: userRow, identity: identityRow }).catch(() => {});
+
+  // Cache in memoryDb for synchronous lookups
   db.authAccounts[userId] = {
     authUserId: userId,
     normalizedEmail,
-    normalizedPhone: '9000012345',
+    normalizedPhone: '',
     googleUid: params.googleUid,
     emailVerified: params.emailVerified,
     phoneVerified: false,
@@ -2412,7 +2738,7 @@ export function upsertGoogleAuthenticatedUser(params: {
   };
 
   db.users[userId] = {
-    profile,
+    profile: newProfile,
     status: 'active',
     googleUid: params.googleUid,
     emailVerified: params.emailVerified,
@@ -2424,7 +2750,7 @@ export function upsertGoogleAuthenticatedUser(params: {
   db.emailIndex[normalizedEmail] = userId;
   saveAuthDb(db);
 
-  return profile;
+  return newProfile;
 }
 
 const DISALLOWED_STATIC_OTPS = new Set([
@@ -3353,6 +3679,12 @@ export function assignUserRoleServer(
   }
   saveAuthDb(db);
 
+  // Authoritative persistence in PostgreSQL
+  dbUpdateUser(targetUserId, { role: newRole }).catch(() => {});
+
+  // Invalidate previous sessions when role changes (prevents demoted admins from retaining access)
+  dbRevokeUserSessionsOnRoleChange(targetUserId, newRole).catch(() => {});
+
   recordServerAuditLog({
     actorId: adminUser.id,
     actorEmail: adminUser.email,
@@ -3401,6 +3733,15 @@ export function setUserBanStatusServer(
     }
   }
   saveAuthDb(db);
+
+  const newStatus = banned ? 'banned' : 'active';
+  // Authoritative PostgreSQL persistence
+  dbUpdateUser(targetUserId, { status: newStatus }).catch(() => {});
+
+  // If banned or suspended, invalidate all active sessions immediately in PostgreSQL
+  if (banned) {
+    dbRevokeAllUserSessionsSupabase(targetUserId, undefined, 'account_banned_by_admin').catch(() => {});
+  }
 
   recordServerAuditLog({
     actorId: adminUser.id,

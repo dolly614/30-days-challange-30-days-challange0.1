@@ -19,10 +19,14 @@ const TEACHER_LEADERBOARD = [
 ];
 
 export default function LeaderboardPage() {
-  const { leaderboard, refreshLeaderboard } = useUyanixStore();
+  const { leaderboard, refreshLeaderboard, syncLeaderboard } = useUyanixStore();
   const [filter, setFilter] = useState<ClassFilter>('all');
   const [boardType, setBoardType] = useState<'students' | 'teachers'>('students');
   const [searchQuery, setSearchQuery] = useState('');
+
+  useEffect(() => {
+    syncLeaderboard();
+  }, [syncLeaderboard]);
 
   const handleRefresh = () => {
     refreshLeaderboard();

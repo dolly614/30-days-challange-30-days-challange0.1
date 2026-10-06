@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import {
   authenticateWithPassword,
-  enforceRateLimit,
+  enforceDistributedRateLimit,
   extractSessionTokenFromRequest,
   getClientIp,
   hasForbiddenUrlTokenParams,
@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
     }
 
     const ip = getClientIp(req);
-    const ipRate = enforceRateLimit(`login:ip:${ip}`, 10, 15 * 60 * 1000);
+    const ipRate = await enforceDistributedRateLimit(`login:ip:${ip}`, 10, 15 * 60 * 1000);
     if (!ipRate.allowed) {
       return NextResponse.json(
         {
@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const idRate = enforceRateLimit(
+    const idRate = await enforceDistributedRateLimit(
       `login:id:${parsed.data.identifier.toLowerCase()}`,
       8,
       15 * 60 * 1000

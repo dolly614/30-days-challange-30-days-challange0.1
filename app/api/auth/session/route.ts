@@ -3,6 +3,7 @@ import {
   clearSessionCookie,
   extractSessionTokenFromRequest,
   getAuthenticatedUser,
+  getAuthoritativeUser,
   getUserPhoneVerificationStatus,
   hasForbiddenUrlTokenParams,
   rotateSessionToken,
@@ -30,7 +31,7 @@ export async function GET(req: NextRequest) {
     return res;
   }
 
-  const auth = getAuthenticatedUser(req);
+  const auth = await getAuthoritativeUser(req);
   if (!auth) {
     const res = NextResponse.json(
       { authenticated: false, phoneVerified: false, user: null },

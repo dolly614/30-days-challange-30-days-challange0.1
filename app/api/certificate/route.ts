@@ -13,6 +13,8 @@ import {
   verifyCertificatePublicly,
 } from '@/lib/certificate-security-governance';
 import { grantServerExamPaymentEntitlement } from '@/lib/exam-engine-governance';
+import { authoritativeVerifyCertificate } from '@/lib/exam-authoritative-service';
+import { getSupabaseAdminClient } from '@/lib/supabase-server';
 
 export async function GET(req: NextRequest) {
   const verifyId = req.nextUrl.searchParams.get('verify');
@@ -22,6 +24,27 @@ export async function GET(req: NextRequest) {
 
   // 1. Public Verification Endpoint (Sections 17, 18, 19, 20, 34, 35)
   if (verifyId !== null) {
+    const dbVerified = await authoritativeVerifyCertificate(verifyId);
+    if (dbVerified.state === 'VALID' && dbVerified.certificate) {
+      return NextResponse.json({
+        state: 'VALID',
+        verified: true,
+        certificate: dbVerified.certificate,
+      }, {
+        status: 200,
+        headers: {
+          'Cache-Control': 'public, max-age=300, stale-while-revalidate=600',
+          'X-Content-Type-Options': 'nosniff',
+        },
+      });
+    } else if (dbVerified.state === 'REVOKED') {
+      return NextResponse.json({
+        state: 'REVOKED',
+        verified: false,
+        error: 'This certificate has been revoked for administrative or integrity reasons.',
+      }, { status: 410 });
+    }
+
     const verified = verifyCertificatePublicly({
       publicCertificateId: verifyId,
       verificationToken: token,
@@ -63,6 +86,40 @@ export async function GET(req: NextRequest) {
       status: 200,
       headers: dl.responseHeaders,
     });
+  }
+
+  // Check Supabase PostgreSQL public.certificates first
+  const supabase = getSupabaseAdminClient();
+  if (supabase) {
+    try {
+      const { data: dbCert } = await supabase
+        .from('certificates')
+        .select('*')
+        .or(`user_id.eq.${auth.user.id},recipient_display_name.eq.${auth.user.name || 'nobody'}`)
+        .eq('status', 'AVAILABLE')
+        .order('issued_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (dbCert) {
+        return NextResponse.json({
+          ok: true,
+          publicCertificateId: dbCert.public_certificate_id,
+          qrVerificationUrl: dbCert.url,
+          status: dbCert.status,
+          issueDate: dbCert.issued_at,
+          scoreSnapshot: dbCert.score_snapshot,
+          rankSnapshot: 4,
+          recipientName: dbCert.recipient_display_name,
+          verificationVersion: dbCert.verification_version,
+        }, {
+          status: 200,
+          headers: { 'Cache-Control': 'private, no-store' },
+        });
+      }
+    } catch {
+      // fallback
+    }
   }
 
   // Default GET for authenticated student: issue or retrieve their authoritative certificate
@@ -110,6 +167,7 @@ export async function GET(req: NextRequest) {
       issueDate: issued.certificate.issue_date,
       scoreSnapshot: issued.certificate.score_snapshot,
       rankSnapshot: issued.certificate.rank_snapshot,
+      recipientName: issued.certificate.recipient_name_snapshot,
       verificationVersion: issued.certificate.verification_version,
     },
     {

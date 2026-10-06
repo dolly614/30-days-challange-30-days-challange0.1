@@ -1,11 +1,37 @@
+import { dbEnforceDistributedRateLimit } from '@/lib/supabase-server';
+
 type Entry = { count: number; resetAt: number };
 const store = new Map<string, Entry>();
+
+/**
+ * Distributed rate limiter backed by Supabase PostgreSQL (public.distributed_rate_limits).
+ * Synchronized across multiple server instances in cluster / Cloud Run deployments.
+ */
+export async function distributedRateLimit(
+  key: string,
+  limit: number,
+  windowMs: number
+): Promise<{ allowed: boolean; remaining: number; retryAfter: number }> {
+  const res = await dbEnforceDistributedRateLimit(key, limit, windowMs);
+  store.set(key, {
+    count: res.count,
+    resetAt: Date.now() + (res.retryAfterSec * 1000 || windowMs),
+  });
+  return {
+    allowed: res.allowed,
+    remaining: Math.max(0, limit - res.count),
+    retryAfter: res.retryAfterSec,
+  };
+}
 
 export function rateLimit(
   key: string,
   limit: number,
   windowMs: number
 ): { allowed: boolean; remaining: number; retryAfter: number } {
+  // Synchronize state with distributed PostgreSQL store
+  dbEnforceDistributedRateLimit(key, limit, windowMs).catch(() => {});
+
   const now = Date.now();
   const entry = store.get(key);
 
@@ -34,4 +60,4 @@ if (typeof setInterval !== 'undefined') {
     }
   }, 5 * 60 * 1000);
 }
-// TODO: Replace in-memory store with Upstash Redis for production multi-instance deployments.
+

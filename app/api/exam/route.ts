@@ -4,15 +4,15 @@ import {
   requireAuthenticatedUser,
 } from '@/lib/server-auth';
 import {
+  authoritativeStartExamAttempt,
+  authoritativeAutosaveExamAnswer,
+  authoritativeRecordExamViolation,
+  authoritativeFinalizeAndScoreExam,
+  getExamMetadata,
+} from '@/lib/exam-authoritative-service';
+import {
   executeControlledAdminExamResultCorrection,
-  finalizeAndScoreServerExamAttempt,
-  getSanitizedQuestionsForClient,
-  hasServerExamPaymentEntitlement,
-  recordExamViolationEvent,
-  saveExamAttemptAnswer,
-  startOrResumeServerExamAttempt,
 } from '@/lib/exam-engine-governance';
-import { checkAuthoritativeExamEntitlement } from '@/lib/payment-financial-governance';
 
 export async function GET(req: NextRequest) {
   const auth = requireAuthenticatedUser(req);
@@ -31,13 +31,55 @@ export async function GET(req: NextRequest) {
   const examType =
     req.nextUrl.searchParams.get('type') === 'final' ? 'final' : 'mid';
 
-  // Return sanitized questions ONLY (no correctIndex, correctAnswer, or explanation before submission)
+  // Section 16: Return non-sensitive metadata before start.
+  // Only return questions if student has a valid active attempt!
+  const meta = await getExamMetadata(examType, auth.user.id);
+
+  if (meta.activeAttempt && meta.isPaid) {
+    // Resume active attempt
+    const resumed = await authoritativeStartExamAttempt({
+      userId: auth.user.id,
+      studentName: auth.user.name || 'Student Champion',
+      studentRole: auth.user.role,
+      studentClass: auth.user.classNum || 12,
+      examType,
+    });
+
+    if (resumed.ok) {
+      return NextResponse.json(
+        {
+          ok: true,
+          examType,
+          isPaid: meta.isPaid,
+          hasActiveAttempt: true,
+          attemptId: resumed.attemptId,
+          remainingSeconds: resumed.remainingSeconds,
+          deadlineMs: resumed.deadlineMs,
+          questions: resumed.questions,
+          metadata: meta,
+        },
+        {
+          status: 200,
+          headers: { 'Cache-Control': 'no-store, private' },
+        }
+      );
+    }
+  }
+
+  // Before starting attempt or before paying: return metadata only with zero questions
   return NextResponse.json(
     {
+      ok: true,
       examType,
-      questions: getSanitizedQuestionsForClient(),
+      isPaid: meta.isPaid,
+      hasActiveAttempt: false,
+      questions: [],
+      metadata: meta,
     },
-    { status: 200 }
+    {
+      status: 200,
+      headers: { 'Cache-Control': 'no-store, private' },
+    }
   );
 }
 
@@ -61,82 +103,62 @@ export async function POST(req: NextRequest) {
     const examType: 'mid' | 'final' =
       body?.examType === 'final' ? 'final' : 'mid';
 
+    // 1. START OR RESUME ATTEMPT
     if (action === 'START_ATTEMPT') {
-      const hasEntitlement =
-        checkAuthoritativeExamEntitlement({
-          userId: auth.user.id,
-          examType,
-        }).hasActiveEntitlement ||
-        hasServerExamPaymentEntitlement(auth.user.id, examType);
-
-      if (!hasEntitlement && auth.user.role !== 'admin') {
-        return NextResponse.json(
-          {
-            error:
-              'Verified server-side payment entitlement is required before starting this exam.',
-            errorCode: 'PAYMENT_ENTITLEMENT_REQUIRED',
-          },
-          { status: 402 }
-        );
-      }
-
-      const started = startOrResumeServerExamAttempt({
-        studentId: auth.user.id,
-        actorRole: auth.user.role,
+      const started = await authoritativeStartExamAttempt({
+        userId: auth.user.id,
+        studentName: auth.user.name || 'Student Champion',
+        studentRole: auth.user.role,
         studentClass: auth.user.classNum || 12,
         examType,
-        requirePaymentEntitlement: auth.user.role !== 'admin',
       });
 
       if (!started.ok) {
         return NextResponse.json(
-          { error: started.reason, errorCode: started.errorCode },
-          { status: started.httpStatus }
+          { error: started.error, errorCode: started.errorCode },
+          { status: started.errorCode === 'PAYMENT_ENTITLEMENT_REQUIRED' ? 402 : 400 }
         );
       }
 
-      return NextResponse.json(started, { status: started.httpStatus });
+      return NextResponse.json(started, { status: 200 });
     }
 
+    // 2. AUTOSAVE SINGLE ANSWER
     if (action === 'AUTOSAVE_ANSWER') {
-      const saved = saveExamAttemptAnswer({
+      const saved = await authoritativeAutosaveExamAnswer({
         attemptId: String(body?.attemptId || ''),
-        studentId: auth.user.id,
+        userId: auth.user.id,
         questionId: String(body?.questionId || ''),
         selectedOption: Number(body?.selectedOption),
       });
 
       if (!saved.ok) {
         return NextResponse.json(
-          { error: saved.reason, errorCode: saved.errorCode },
-          { status: saved.httpStatus }
+          { error: saved.error, errorCode: 'AUTOSAVE_FAILED' },
+          { status: 400 }
         );
       }
 
       return NextResponse.json(saved, { status: 200 });
     }
 
+    // 3. PROCTORING VIOLATION RECORDING
     if (action === 'RECORD_VIOLATION') {
-      const recorded = recordExamViolationEvent({
+      const recorded = await authoritativeRecordExamViolation({
         attemptId: String(body?.attemptId || ''),
-        studentId: auth.user.id,
-        eventType: String(body?.eventType || ''),
+        userId: auth.user.id,
+        eventType: String(body?.eventType || 'TAB_HIDDEN'),
         metadata:
           body?.metadata && typeof body.metadata === 'object'
             ? body.metadata
             : {},
+        requestId: req.headers.get('x-request-id') || undefined,
       });
-
-      if (!recorded.ok) {
-        return NextResponse.json(
-          { error: recorded.reason, errorCode: recorded.errorCode },
-          { status: recorded.httpStatus }
-        );
-      }
 
       return NextResponse.json(recorded, { status: 200 });
     }
 
+    // 4. ADMIN CORRECTION OF RESULT
     if (action === 'ADMIN_CORRECT_RESULT') {
       const corrected = executeControlledAdminExamResultCorrection({
         attemptId: String(body?.attemptId || ''),
@@ -156,38 +178,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(corrected, { status: 200 });
     }
 
-    // Default: SUBMIT_ATTEMPT (Server-authoritative scoring; ignores client score/total/rank)
+    // 5. SUBMIT ATTEMPT OR AUTO_SUBMIT (Server-authoritative scoring; ignores client score/total/rank)
     let attemptId = String(body?.attemptId || '');
     if (!attemptId) {
-      const hasEntitlement =
-        checkAuthoritativeExamEntitlement({
-          userId: auth.user.id,
-          examType,
-        }).hasActiveEntitlement ||
-        hasServerExamPaymentEntitlement(auth.user.id, examType);
-
-      if (!hasEntitlement && auth.user.role !== 'admin') {
-        return NextResponse.json(
-          {
-            error:
-              'Verified server-side payment entitlement is required to submit an exam attempt.',
-            errorCode: 'PAYMENT_ENTITLEMENT_REQUIRED',
-          },
-          { status: 402 }
-        );
-      }
-
-      const autoStart = startOrResumeServerExamAttempt({
-        studentId: auth.user.id,
-        actorRole: auth.user.role,
+      const autoStart = await authoritativeStartExamAttempt({
+        userId: auth.user.id,
+        studentName: auth.user.name || 'Student Champion',
+        studentRole: auth.user.role,
         studentClass: auth.user.classNum || 12,
         examType,
-        requirePaymentEntitlement: auth.user.role !== 'admin',
       });
       if (!autoStart.ok) {
         return NextResponse.json(
-          { error: autoStart.reason, errorCode: autoStart.errorCode },
-          { status: autoStart.httpStatus }
+          { error: autoStart.error, errorCode: autoStart.errorCode },
+          { status: autoStart.errorCode === 'PAYMENT_ENTITLEMENT_REQUIRED' ? 402 : 400 }
         );
       }
       attemptId = autoStart.attemptId;
@@ -195,21 +199,27 @@ export async function POST(req: NextRequest) {
 
     const idempotencyKey =
       req.headers.get('idempotency-key') ||
+      req.headers.get('x-idempotency-key') ||
       (typeof body?.idempotencyKey === 'string' ? body.idempotencyKey : undefined);
 
-    const finalized = finalizeAndScoreServerExamAttempt({
+    const isAutoSubmit = action === 'AUTO_SUBMIT' || body?.autoSubmittedDueToTimer === true;
+
+    const finalized = await authoritativeFinalizeAndScoreExam({
       attemptId,
-      actorId: auth.user.id,
-      actorRole: auth.user.role,
+      userId: auth.user.id,
+      studentName: auth.user.name || 'Student Champion',
+      studentSchool: auth.user.school || 'Delhi Public School',
+      studentClass: auth.user.classNum || 12,
       submittedAnswers:
         body?.answers && typeof body.answers === 'object' ? body.answers : {},
       idempotencyKey,
+      autoSubmittedDueToTimer: isAutoSubmit,
     });
 
     if (!finalized.ok) {
       return NextResponse.json(
-        { error: finalized.reason, errorCode: finalized.errorCode },
-        { status: finalized.httpStatus }
+        { error: finalized.error, errorCode: 'SUBMIT_FAILED' },
+        { status: 400 }
       );
     }
 

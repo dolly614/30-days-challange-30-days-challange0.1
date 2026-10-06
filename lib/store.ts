@@ -2,7 +2,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { EXAM_QUESTIONS_POOL, MCQQuestion } from './curriculum';
+import { MCQQuestion } from './curriculum';
 import {
   beginAuthOrNavigationRequest,
   invalidateInFlightNavigationOnAuthBoundary,
@@ -54,6 +54,7 @@ export interface UserProfile {
   idVerified: boolean;
   idCardName?: string;
   streakReminders: boolean;
+  onboardingRequired?: boolean;
   createdAt: string;
 }
 
@@ -183,42 +184,48 @@ interface UyanixState {
   logout: () => Promise<void>;
   updateProfile: (updates: Partial<UserProfile>) => Promise<boolean>;
   toggleDarkMode: () => void;
-  setBrandLogo: (url: string) => void;
-  resetBrandLogo: () => void;
+  setBrandLogo: (url: string) => Promise<boolean>;
+  resetBrandLogo: () => Promise<boolean>;
   completeDay: (day: number, score: number) => void;
+  syncStudentProgress: () => Promise<boolean>;
+  syncLeaderboard: () => Promise<boolean>;
+  submitDailyQuiz: (day: number, answers: number[]) => Promise<{ ok: boolean; score?: number; error?: string; status?: string }>;
   refreshLeaderboard: () => void;
-  markPrizePaid: (studentId: string) => void;
-  toggleBanStudent: (studentId: string) => void;
+  markPrizePaid: (studentId: string) => Promise<boolean>;
+  toggleBanStudent: (studentId: string) => Promise<boolean>;
 
-  // Chapters Admin
-  saveChapter: (classNum: number, day: number, title: string, content: string) => void;
-  bulkSaveChapters: (classNum: number, days: { day: number; title: string; content: string }[], overwrite: boolean) => number;
-  deleteClassChapters: (classNum: number) => void;
-  resetAllChapters: () => void;
+  // Chapters Admin (Server Authoritative)
+  refreshChapters: (classNum?: number) => Promise<void>;
+  saveChapter: (classNum: number, day: number, title: string, content: string) => Promise<boolean>;
+  bulkSaveChapters: (classNum: number, days: { day: number; title: string; content: string }[], overwrite: boolean) => Promise<number>;
+  deleteClassChapters: (classNum: number) => Promise<boolean>;
+  resetAllChapters: () => Promise<boolean>;
 
   // Teacher & Admin Actions
-  updateTeacherStatus: (teacherId: string, status: 'approved' | 'rejected' | 'pending') => void;
-  requestWithdrawal: (method: 'UPI' | 'Bank', destination: string, amount: number) => boolean;
-  processWithdrawal: (withdrawalId: string, status: 'paid' | 'rejected') => void;
+  updateTeacherStatus: (teacherId: string, status: 'approved' | 'rejected' | 'pending') => Promise<boolean>;
+  syncTeacherData: () => Promise<void>;
+  requestWithdrawal: (method: 'UPI' | 'Bank', destination: string, amount: number) => Promise<boolean>;
+  processWithdrawal: (withdrawalId: string, status: 'paid' | 'rejected') => Promise<boolean>;
   submitTeacherKyc: (pan: string, upiId: string) => void;
   simulateTeacherReferral: () => void;
 
   // Verifications
+  syncAdminVerifications: () => Promise<void>;
   submitStudentIdVerification: (docName: string) => void;
-  handleVerification: (id: string, status: 'approved' | 'rejected') => void;
+  handleVerification: (id: string, status: 'approved' | 'rejected') => Promise<boolean>;
 
   // Exams & Payments
   payForExam: (type: 'mid' | 'final', razorpayId: string) => void;
   submitExamAttempt: (type: 'mid' | 'final', score: number, total: number, answers: Record<string, number>) => ExamAttempt;
-  refundPayment: (paymentId: string) => void;
-  addCustomExamQuestion: (q: MCQQuestion) => void;
-  bulkImportExamQuestions: (questions: MCQQuestion[]) => number;
-  deleteCustomExamQuestion: (id: string) => void;
+  refundPayment: (paymentId: string) => Promise<boolean>;
+  addCustomExamQuestion: (q: MCQQuestion) => Promise<boolean>;
+  bulkImportExamQuestions: (questions: MCQQuestion[]) => Promise<number>;
+  deleteCustomExamQuestion: (id: string) => Promise<boolean>;
   importLeaderboardFromSheet: (students: StudentLeader[]) => void;
 
   // Notifications
   markAllNotificationsRead: () => void;
-  broadcastNotification: (title: string, body: string) => void;
+  broadcastNotification: (title: string, body: string) => Promise<{ ok: boolean; recipientCount?: number }>;
 }
 
 const DEFAULT_LOGO = '/uyanix-logo.jpg';
@@ -292,11 +299,9 @@ export const useUyanixStore = create<UyanixState>()(
       authChecked: false,
       darkMode: false,
       brandLogo: DEFAULT_LOGO,
-      completedDays: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-      dailyScores: {
-        1: 5, 2: 5, 3: 4, 4: 5, 5: 5, 6: 4, 7: 5, 8: 5, 9: 4, 10: 5, 11: 5, 12: 5, 13: 4, 14: 5, 15: 5,
-      },
-      leaderboard: INITIAL_LEADERBOARD,
+      completedDays: [],
+      dailyScores: {},
+      leaderboard: [],
       teachers: [
         {
           id: 'teacher-dolly',
@@ -322,7 +327,7 @@ export const useUyanixStore = create<UyanixState>()(
       fraudLogs: [],
       verifications: [],
       savedChapters: {},
-      customExamQuestions: EXAM_QUESTIONS_POOL,
+      customExamQuestions: [],
       examPaid: { mid: false, final: false },
       examAttempts: [],
       payments: [
@@ -435,16 +440,22 @@ export const useUyanixStore = create<UyanixState>()(
               currentUser: incomingUser,
               isAuthenticated: true,
               authChecked: true,
+              completedDays: isUserSwitch ? [] : state.completedDays,
+              dailyScores: isUserSwitch ? {} : state.dailyScores,
               examPaid: isUserSwitch
                 ? { mid: false, final: false }
                 : state.examPaid,
             }));
+            // Load authoritative daily progress from database
+            get().syncStudentProgress();
             return incomingUser;
           }
           set({
             currentUser: null,
             isAuthenticated: false,
             authChecked: true,
+            completedDays: [],
+            dailyScores: {},
             examPaid: { mid: false, final: false },
           });
           return null;
@@ -512,6 +523,8 @@ export const useUyanixStore = create<UyanixState>()(
           currentUser: null,
           isAuthenticated: false,
           authChecked: true,
+          completedDays: [],
+          dailyScores: {},
           examPaid: { mid: false, final: false },
           auditLogs: [
             {
@@ -590,30 +603,50 @@ export const useUyanixStore = create<UyanixState>()(
           return { darkMode: next };
         }),
 
-      setBrandLogo: (url) => {
+      setBrandLogo: async (url) => {
         if (get().currentUser?.role !== 'admin') {
           get().syncServerSession();
-          return;
+          return false;
         }
-        set({ brandLogo: url });
-        verifyServerAdminAction(
-          'SET_BRAND_LOGO',
-          { target: 'brandLogo' },
-          () => get().syncServerSession()
-        );
+        try {
+          const res = await fetch('/api/admin/action', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ action: 'SET_BRAND_LOGO', logoUrl: url }),
+          });
+          const data = await res.json();
+          if (res.ok && (data.ok || data.authorized)) {
+            set({ brandLogo: url });
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
+        }
       },
 
-      resetBrandLogo: () => {
+      resetBrandLogo: async () => {
         if (get().currentUser?.role !== 'admin') {
           get().syncServerSession();
-          return;
+          return false;
         }
-        set({ brandLogo: DEFAULT_LOGO });
-        verifyServerAdminAction(
-          'RESET_BRAND_LOGO',
-          { target: 'brandLogo' },
-          () => get().syncServerSession()
-        );
+        try {
+          const res = await fetch('/api/admin/action', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ action: 'RESET_BRAND_LOGO' }),
+          });
+          const data = await res.json();
+          if (res.ok && (data.ok || data.authorized)) {
+            set({ brandLogo: DEFAULT_LOGO });
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
+        }
       },
 
       completeDay: (day, score) =>
@@ -627,7 +660,7 @@ export const useUyanixStore = create<UyanixState>()(
               {
                 id: `notif-${Date.now()}`,
                 title: `✅ Day ${day} Completed (${score}/5)!`,
-                body: `Shandar! Aapने Day ${day} quiz mein ${score}/5 score kiya. Streak: ${nextDays.length} days!`,
+                body: `Shandar! Aapne Day ${day} quiz complete kiya (${score}/5). Streak: ${nextDays.length} days!`,
                 read: false,
                 createdAt: 'Just now',
               },
@@ -636,245 +669,503 @@ export const useUyanixStore = create<UyanixState>()(
           };
         }),
 
-      refreshLeaderboard: () =>
-        set((state) => ({
-          leaderboard: [...state.leaderboard].sort((a, b) => b.score - a.score || a.rank - b.rank),
-        })),
-
-      markPrizePaid: (studentId) => {
-        if (get().currentUser?.role !== 'admin') {
-          get().syncServerSession();
-          return;
+      syncStudentProgress: async () => {
+        try {
+          const res = await fetch('/api/student/progress', {
+            method: 'GET',
+            credentials: 'include',
+            cache: 'no-store',
+          });
+          if (!res.ok) return false;
+          const data = await res.json();
+          if (data?.ok && data?.progress) {
+            set({
+              completedDays: Array.isArray(data.progress.completedDays) ? data.progress.completedDays : [],
+              dailyScores: data.progress.dailyScores && typeof data.progress.dailyScores === 'object' ? data.progress.dailyScores : {},
+            });
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
         }
-        set((state) => ({
-          leaderboard: state.leaderboard.map((s) =>
-            s.id === studentId ? { ...s, prizePaid: !s.prizePaid } : s
-          ),
-          auditLogs: [
-            {
-              id: `aud-${Date.now()}`,
-              actor: state.currentUser?.email || 'admin',
-              action: 'PRIZE_MARK_PAID',
-              target: studentId,
-              timestamp: new Date().toISOString().slice(0, 16).replace('T', ' '),
-            },
-            ...state.auditLogs,
-          ],
-        }));
-        verifyServerAdminAction(
-          'MARK_PRIZE_PAID',
-          { target: studentId },
-          () => get().syncServerSession()
-        );
       },
 
-      toggleBanStudent: (studentId) => {
+      syncLeaderboard: async () => {
+        try {
+          const res = await fetch('/api/leaderboard', {
+            method: 'GET',
+            credentials: 'include',
+            cache: 'no-store',
+          });
+          if (!res.ok) return false;
+          const data = await res.json();
+          if (data?.ok && Array.isArray(data?.entries)) {
+            set({
+              leaderboard: data.entries,
+            });
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
+        }
+      },
+
+      submitDailyQuiz: async (day: number, answers: number[]) => {
+        try {
+          const res = await fetch(`/api/daily/${day}/submit`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ answers }),
+          });
+          const data = await res.json();
+          if (data?.ok && data?.status === 'SUCCESS') {
+            get().completeDay(day, data.score);
+            if (Array.isArray(data.completedDays)) {
+              set({ completedDays: data.completedDays });
+            }
+            return data;
+          }
+          return data;
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : 'Network error';
+          return { ok: false, error: msg, errorCode: 'NETWORK_ERROR' };
+        }
+      },
+
+      refreshLeaderboard: () => {
+        get().syncLeaderboard();
+        set((state) => ({
+          leaderboard: [...state.leaderboard].sort((a, b) => b.score - a.score || a.rank - b.rank),
+        }));
+      },
+
+      markPrizePaid: async (studentId) => {
         if (get().currentUser?.role !== 'admin') {
           get().syncServerSession();
-          return;
+          return false;
+        }
+        try {
+          const idempotencyKey = `idemp_prz_${studentId}_${Date.now()}`;
+          const res = await fetch('/api/admin/action', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-idempotency-key': idempotencyKey,
+            },
+            credentials: 'include',
+            body: JSON.stringify({
+              action: 'MARK_PRIZE_PAID',
+              target: studentId,
+              studentId,
+              targetStatus: 'PAID',
+              idempotencyKey,
+            }),
+          });
+          const data = await res.json();
+          if (res.ok && (data.ok || data.authorized)) {
+            set((state) => ({
+              leaderboard: state.leaderboard.map((s) =>
+                s.id === studentId ? { ...s, prizePaid: true } : s
+              ),
+            }));
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
+        }
+      },
+
+      toggleBanStudent: async (studentId) => {
+        if (get().currentUser?.role !== 'admin') {
+          get().syncServerSession();
+          return false;
         }
         const targetStudent = get().leaderboard.find((s) => s.id === studentId);
         const nextBanned = targetStudent?.status !== 'banned';
-        set((state) => ({
-          leaderboard: state.leaderboard.map((s) =>
-            s.id === studentId ? { ...s, status: s.status === 'banned' ? 'active' : 'banned' } : s
-          ),
-        }));
-        verifyServerAdminAction(
-          'TOGGLE_BAN_STUDENT',
-          { target: studentId, targetUserId: studentId, banned: nextBanned },
-          () => get().syncServerSession()
-        );
+        try {
+          const res = await fetch('/api/admin/action', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              action: 'TOGGLE_BAN_STUDENT',
+              target: studentId,
+              targetUserId: studentId,
+              banned: nextBanned,
+            }),
+          });
+          const data = await res.json();
+          if (res.ok && (data.ok || data.authorized)) {
+            set((state) => ({
+              leaderboard: state.leaderboard.map((s) =>
+                s.id === studentId ? { ...s, status: nextBanned ? 'banned' : 'active' } : s
+              ),
+            }));
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
+        }
       },
 
-      saveChapter: (classNum, day, title, content) => {
+      refreshChapters: async (classNum) => {
+        try {
+          const url = typeof classNum === 'number' ? `/api/admin/chapters?class=${classNum}` : '/api/admin/chapters';
+          const res = await fetch(url, { credentials: 'include' });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.ok && Array.isArray(data.chapters)) {
+              set((state) => {
+                const nextChapters = { ...state.savedChapters };
+                for (const c of data.chapters) {
+                  const key = `${c.class_num}-${c.day}`;
+                  nextChapters[key] = {
+                    classNum: c.class_num,
+                    day: c.day,
+                    title: c.title,
+                    content: c.content,
+                    updatedAt: c.updated_at,
+                  };
+                }
+                return { savedChapters: nextChapters };
+              });
+            }
+          }
+        } catch {
+          // preserve state
+        }
+      },
+
+      saveChapter: async (classNum, day, title, content) => {
         if (get().currentUser?.role !== 'admin') {
           get().syncServerSession();
-          return;
+          return false;
         }
-        set((state) => {
-          const key = `${classNum}-${day}`;
-          return {
-            savedChapters: {
-              ...state.savedChapters,
-              [key]: {
-                classNum,
-                day,
-                title,
-                content,
-                updatedAt: new Date().toISOString(),
+        try {
+          const res = await fetch('/api/admin/chapters', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              action: 'SAVE_CHAPTER',
+              classNum,
+              day,
+              title,
+              content,
+            }),
+          });
+          const data = await res.json();
+          if (res.ok && data.ok) {
+            const key = `${classNum}-${day}`;
+            set((state) => ({
+              savedChapters: {
+                ...state.savedChapters,
+                [key]: {
+                  classNum,
+                  day,
+                  title,
+                  content,
+                  updatedAt: new Date().toISOString(),
+                },
               },
-            },
-            auditLogs: [
-              {
-                id: `aud-${Date.now()}`,
-                actor: state.currentUser?.email || 'admin',
-                action: 'SAVE_CHAPTER',
-                target: `Class ${classNum} Day ${day}: ${title}`,
-                timestamp: new Date().toISOString().slice(0, 16).replace('T', ' '),
-              },
-              ...state.auditLogs,
-            ],
-          };
-        });
-        verifyServerAdminAction(
-          'SAVE_CHAPTER',
-          { target: `Class ${classNum} Day ${day}: ${title}` },
-          () => get().syncServerSession()
-        );
+            }));
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
+        }
       },
 
-      bulkSaveChapters: (classNum, days, overwrite) => {
+      bulkSaveChapters: async (classNum, days, overwrite) => {
         if (get().currentUser?.role !== 'admin') {
           get().syncServerSession();
           return 0;
         }
-        let count = 0;
-        set((state) => {
-          const updated = { ...state.savedChapters };
-          for (const item of days) {
-            const key = `${classNum}-${item.day}`;
-            if (overwrite || !updated[key]) {
-              updated[key] = {
-                classNum,
-                day: item.day,
-                title: item.title,
-                content: item.content,
-                updatedAt: new Date().toISOString(),
-              };
-              count++;
+        try {
+          const res = await fetch('/api/admin/chapters', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              action: 'BULK_SAVE_CHAPTERS',
+              classNum,
+              items: days,
+              overwrite,
+            }),
+          });
+          const data = await res.json();
+          if (res.ok && data.ok) {
+            const updated = { ...get().savedChapters };
+            for (const item of days) {
+              const key = `${classNum}-${item.day}`;
+              if (overwrite || !updated[key]) {
+                updated[key] = {
+                  classNum,
+                  day: item.day,
+                  title: item.title,
+                  content: item.content,
+                  updatedAt: new Date().toISOString(),
+                };
+              }
+            }
+            set({ savedChapters: updated });
+            return (data.inserted || 0) + (data.updated || 0);
+          }
+          return 0;
+        } catch {
+          return 0;
+        }
+      },
+
+      deleteClassChapters: async (classNum) => {
+        if (get().currentUser?.role !== 'admin') {
+          get().syncServerSession();
+          return false;
+        }
+        try {
+          const res = await fetch('/api/admin/chapters', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              action: 'DELETE_CLASS_CHAPTERS',
+              classNum,
+            }),
+          });
+          const data = await res.json();
+          if (res.ok && data.ok) {
+            set((state) => {
+              const next = { ...state.savedChapters };
+              Object.keys(next).forEach((k) => {
+                if (k.startsWith(`${classNum}-`)) {
+                  delete next[k];
+                }
+              });
+              return { savedChapters: next };
+            });
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
+        }
+      },
+
+      resetAllChapters: async () => {
+        if (get().currentUser?.role !== 'admin') {
+          get().syncServerSession();
+          return false;
+        }
+        try {
+          const res = await fetch('/api/admin/chapters', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ action: 'RESET_ALL_CHAPTERS' }),
+          });
+          const data = await res.json();
+          if (res.ok && data.ok) {
+            set({ savedChapters: {} });
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
+        }
+      },
+
+      updateTeacherStatus: async (teacherId, status) => {
+        if (get().currentUser?.role !== 'admin') {
+          get().syncServerSession();
+          return false;
+        }
+        try {
+          const res = await fetch('/api/admin/action', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              action: 'UPDATE_TEACHER_STATUS',
+              target: teacherId,
+              teacherId,
+              status,
+            }),
+          });
+          const data = await res.json();
+          if (res.ok && (data.ok || data.authorized)) {
+            set((state) => ({
+              teachers: state.teachers.map((t) => (t.id === teacherId ? { ...t, status } : t)),
+            }));
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
+        }
+      },
+
+      syncTeacherData: async () => {
+        try {
+          const res = await fetch('/api/teacher/action', {
+            method: 'GET',
+            credentials: 'include',
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.ok && data.teacher) {
+              const t = data.teacher;
+              set((state) => {
+                const prev = state.teachers[0];
+                const updatedTeacher: TeacherRecord = {
+                  id: t.id,
+                  name: t.name || state.currentUser?.name || 'Teacher',
+                  email: t.email || state.currentUser?.email || '',
+                  code: t.code || 'DOLLOXW0',
+                  tier: t.tier || 'Beginner Teacher',
+                  status: t.status || 'approved',
+                  balance: typeof t.balance === 'number' ? t.balance : 0,
+                  totalEarned: typeof t.totalEarned === 'number' ? t.totalEarned : 0,
+                  thisMonthEarned: prev?.thisMonthEarned || 0,
+                  referredCount: prev?.referredCount || 0,
+                  pendingReferrals: prev?.pendingReferrals || 0,
+                  paidActiveCount: prev?.paidActiveCount || 0,
+                  riskScore: prev?.riskScore || 0,
+                  kycVerified: Boolean(t.kycVerified),
+                  kycPan: t.kycPan || '',
+                  upiId: t.upiId || '',
+                  dailySignups: prev?.dailySignups || [],
+                };
+                return {
+                  teachers: [updatedTeacher],
+                  withdrawals: Array.isArray(data.withdrawals) && data.withdrawals.length > 0
+                    ? data.withdrawals.map((w: Record<string, unknown>) => ({
+                        id: String(w.id),
+                        teacherId: String(w.teacherId || t.id),
+                        teacherName: updatedTeacher.name,
+                        date: String(w.date || new Date().toISOString().slice(0, 10)),
+                        method: (w.method === 'Bank' ? 'Bank' : 'UPI') as 'UPI' | 'Bank',
+                        destination: String(w.destination || ''),
+                        amount: Number(w.amount || 0),
+                        status: (w.status === 'paid' ? 'paid' : w.status === 'rejected' ? 'rejected' : 'pending') as 'pending' | 'paid' | 'rejected',
+                        invoiceId: String(w.invoiceId || `INV_${String(w.id).slice(0, 8)}`),
+                      }))
+                    : state.withdrawals,
+                };
+              });
             }
           }
-          return { savedChapters: updated };
-        });
-        verifyServerAdminAction(
-          'BULK_SAVE_CHAPTERS',
-          { target: `Class ${classNum} (${count} chapters)` },
-          () => get().syncServerSession()
-        );
-        return count;
-      },
-
-      deleteClassChapters: (classNum) => {
-        if (get().currentUser?.role !== 'admin') {
-          get().syncServerSession();
-          return;
+        } catch {
+          // ignore network sync errors
         }
-        set((state) => {
-          const next = { ...state.savedChapters };
-          Object.keys(next).forEach((k) => {
-            if (k.startsWith(`${classNum}-`)) {
-              delete next[k];
-            }
-          });
-          return { savedChapters: next };
-        });
-        verifyServerAdminAction(
-          'DELETE_CLASS_CHAPTERS',
-          { target: `Class ${classNum}` },
-          () => get().syncServerSession()
-        );
       },
 
-      resetAllChapters: () => {
-        if (get().currentUser?.role !== 'admin') {
-          get().syncServerSession();
-          return;
-        }
-        set({ savedChapters: {} });
-        verifyServerAdminAction(
-          'RESET_ALL_CHAPTERS',
-          { target: 'all_classes' },
-          () => get().syncServerSession()
-        );
-      },
-
-      updateTeacherStatus: (teacherId, status) => {
-        if (get().currentUser?.role !== 'admin') {
-          get().syncServerSession();
-          return;
-        }
-        set((state) => ({
-          teachers: state.teachers.map((t) => (t.id === teacherId ? { ...t, status } : t)),
-          auditLogs: [
-            {
-              id: `aud-${Date.now()}`,
-              actor: state.currentUser?.email || 'admin',
-              action: `TEACHER_${status.toUpperCase()}`,
-              target: teacherId,
-              timestamp: new Date().toISOString().slice(0, 16).replace('T', ' '),
-            },
-            ...state.auditLogs,
-          ],
-        }));
-        verifyServerAdminAction(
-          'UPDATE_TEACHER_STATUS',
-          { target: `${teacherId}:${status}` },
-          () => get().syncServerSession()
-        );
-      },
-
-      requestWithdrawal: (method, destination, amount) => {
+      requestWithdrawal: async (method, destination, amount) => {
         const state = get();
         const role = state.currentUser?.role;
         if (role !== 'teacher' && role !== 'admin') {
-          state.syncServerSession();
+          await state.syncServerSession();
           return false;
         }
-        const teacher = state.teachers[0];
-        if (!teacher || teacher.balance < amount || amount < 500) return false;
+        if (amount < 500) return false;
 
-        const newWithdrawal: WithdrawalRequest = {
-          id: generateCryptographicOpaqueRecordId('WD'),
-          teacherId: teacher.id,
-          teacherName: teacher.name,
-          date: new Date().toISOString().slice(0, 10),
-          method,
-          destination,
-          amount,
-          status: 'pending',
-          invoiceId: generateCryptographicOpaqueRecordId('PAY'),
-        };
+        try {
+          const idempotencyKey = `idemp_wd_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+          const res = await fetch('/api/teacher/action', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-idempotency-key': idempotencyKey,
+            },
+            credentials: 'include',
+            body: JSON.stringify({
+              action: 'REQUEST_WITHDRAWAL',
+              method,
+              destination,
+              amount,
+              idempotencyKey,
+            }),
+          });
+          const data = await res.json();
+          if (res.ok && data.ok) {
+            const w = data.withdrawal;
+            const newWithdrawal: WithdrawalRequest = {
+              id: w?.id || generateCryptographicOpaqueRecordId('WD'),
+              teacherId: w?.teacherId || (state.teachers[0]?.id ?? 't1'),
+              teacherName: state.teachers[0]?.name || state.currentUser?.name || 'Teacher',
+              date: w?.createdAt ? String(w.createdAt).slice(0, 10) : new Date().toISOString().slice(0, 10),
+              method,
+              destination,
+              amount,
+              status: 'pending',
+              invoiceId: `INV_${String(w?.id || 'WD').replace(/[^a-zA-Z0-9]/g, '').slice(0, 8).toUpperCase()}`,
+            };
 
-        set({
-          teachers: state.teachers.map((t, idx) =>
-            idx === 0 ? { ...t, balance: t.balance - amount } : t
-          ),
-          withdrawals: [newWithdrawal, ...state.withdrawals],
-        });
-
-        verifyServerTeacherAction(
-          'REQUEST_WITHDRAWAL',
-          { method, destination, amount },
-          () => get().syncServerSession()
-        );
-        return true;
+            set((s) => ({
+              teachers: s.teachers.map((t) =>
+                t.id === (w?.teacherId || s.teachers[0]?.id)
+                  ? { ...t, balance: typeof data.newBalance === 'number' ? data.newBalance : t.balance - amount }
+                  : t
+              ),
+              withdrawals: [newWithdrawal, ...s.withdrawals],
+            }));
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
+        }
       },
 
-      processWithdrawal: (withdrawalId, status) => {
+      processWithdrawal: async (withdrawalId, status) => {
         if (get().currentUser?.role !== 'admin') {
           get().syncServerSession();
-          return;
+          return false;
         }
-        set((state) => {
-          const target = state.withdrawals.find((w) => w.id === withdrawalId);
-          return {
-            withdrawals: state.withdrawals.map((w) =>
-              w.id === withdrawalId ? { ...w, status } : w
-            ),
-            teachers:
-              status === 'rejected' && target
-                ? state.teachers.map((t) =>
-                    t.id === target.teacherId ? { ...t, balance: t.balance + target.amount } : t
-                  )
-                : state.teachers,
-          };
-        });
-        verifyServerAdminAction(
-          'PROCESS_WITHDRAWAL',
-          { target: `${withdrawalId}:${status}` },
-          () => get().syncServerSession()
-        );
+        try {
+          const action = status === 'paid' ? 'PROCESS_WITHDRAWAL' : 'REJECT_WITHDRAWAL';
+          const idempotencyKey = `idemp_admin_wd_${withdrawalId}_${Date.now()}`;
+          const res = await fetch('/api/admin/action', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-idempotency-key': idempotencyKey,
+            },
+            credentials: 'include',
+            body: JSON.stringify({
+              action,
+              target: withdrawalId,
+              withdrawalId,
+              idempotencyKey,
+            }),
+          });
+          const data = await res.json();
+          if (res.ok && (data.ok || data.authorized)) {
+            set((state) => {
+              const target = state.withdrawals.find((w) => w.id === withdrawalId);
+              return {
+                withdrawals: state.withdrawals.map((w) =>
+                  w.id === withdrawalId ? { ...w, status } : w
+                ),
+                teachers:
+                  status === 'rejected' && target
+                    ? state.teachers.map((t) =>
+                        t.id === target.teacherId ? { ...t, balance: t.balance + target.amount } : t
+                      )
+                    : state.teachers,
+              };
+            });
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
+        }
       },
 
       submitTeacherKyc: (pan, upiId) => {
@@ -921,6 +1212,34 @@ export const useUyanixStore = create<UyanixState>()(
         );
       },
 
+      syncAdminVerifications: async () => {
+        if (get().currentUser?.role !== 'admin') return;
+        try {
+          const res = await fetch('/api/admin/action', {
+            method: 'GET',
+            credentials: 'include',
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data.authorized && Array.isArray(data.verifications)) {
+              set({
+                verifications: data.verifications.map((v: Record<string, unknown>) => ({
+                  id: String(v.id),
+                  studentName: String(v.studentName || 'Student'),
+                  classNum: Number(v.classNum || 10),
+                  school: String(v.school || 'School'),
+                  documentName: String(v.documentName || 'Student ID'),
+                  submittedAt: String(v.submittedAt || 'Recent'),
+                  status: (v.status === 'approved' ? 'approved' : v.status === 'rejected' ? 'rejected' : 'pending') as 'pending' | 'approved' | 'rejected',
+                })),
+              });
+            }
+          }
+        } catch {
+          // ignore network errors
+        }
+      },
+
       submitStudentIdVerification: (docName) =>
         set((state) => {
           const user = state.currentUser;
@@ -939,19 +1258,35 @@ export const useUyanixStore = create<UyanixState>()(
           };
         }),
 
-      handleVerification: (id, status) => {
+      handleVerification: async (id, status) => {
         if (get().currentUser?.role !== 'admin') {
           get().syncServerSession();
-          return;
+          return false;
         }
-        set((state) => ({
-          verifications: state.verifications.map((v) => (v.id === id ? { ...v, status } : v)),
-        }));
-        verifyServerAdminAction(
-          'HANDLE_VERIFICATION',
-          { target: `${id}:${status}` },
-          () => get().syncServerSession()
-        );
+        try {
+          const res = await fetch('/api/admin/action', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              action: 'HANDLE_VERIFICATION',
+              target: id,
+              verificationId: id,
+              targetStatus: status,
+              reason: status === 'rejected' ? 'Document rejected by reviewer' : undefined,
+            }),
+          });
+          const data = await res.json();
+          if (res.ok && (data.ok || data.authorized)) {
+            set((state) => ({
+              verifications: state.verifications.map((v) => (v.id === id ? { ...v, status } : v)),
+            }));
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
+        }
       },
 
       payForExam: (type, razorpayId) =>
@@ -988,81 +1323,141 @@ export const useUyanixStore = create<UyanixState>()(
         return attempt;
       },
 
-      refundPayment: (paymentId) => {
+      refundPayment: async (paymentId) => {
         if (get().currentUser?.role !== 'admin') {
           get().syncServerSession();
-          return;
+          return false;
         }
-        set((state) => ({
-          payments: state.payments.map((p) =>
-            p.id === paymentId ? { ...p, status: 'refunded' } : p
-          ),
-        }));
-        verifyServerAdminAction(
-          'REFUND_PAYMENT',
-          { target: paymentId },
-          () => get().syncServerSession()
-        );
+        try {
+          const idempotencyKey = `idemp_admin_rfnd_${paymentId}_${Date.now()}`;
+          const res = await fetch('/api/admin/action', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-idempotency-key': idempotencyKey,
+            },
+            credentials: 'include',
+            body: JSON.stringify({
+              action: 'REFUND_PAYMENT',
+              target: paymentId,
+              paymentId,
+              idempotencyKey,
+            }),
+          });
+          const data = await res.json();
+          if (res.ok && (data.ok || data.authorized)) {
+            set((state) => ({
+              payments: state.payments.map((p) =>
+                p.id === paymentId ? { ...p, status: 'refunded' } : p
+              ),
+            }));
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
+        }
       },
 
-      addCustomExamQuestion: (q) => {
+      addCustomExamQuestion: async (q) => {
         if (get().currentUser?.role !== 'admin') {
           get().syncServerSession();
-          return;
+          return false;
         }
-        set((state) => ({
-          customExamQuestions: [q, ...state.customExamQuestions],
-        }));
-        verifyServerAdminAction(
-          'ADD_EXAM_QUESTION',
-          { target: q.id },
-          () => get().syncServerSession()
-        );
+        try {
+          const res = await fetch('/api/admin/action', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              action: 'ADD_EXAM_QUESTION',
+              target: q.id,
+              question: q,
+            }),
+          });
+          const data = await res.json();
+          if (res.ok && (data.ok || data.authorized)) {
+            set((state) => ({
+              customExamQuestions: [q, ...state.customExamQuestions],
+            }));
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
+        }
       },
 
-      bulkImportExamQuestions: (questions) => {
+      bulkImportExamQuestions: async (questions) => {
         const role = get().currentUser?.role;
         if (role !== 'admin' && role !== 'teacher') {
           get().syncServerSession();
           return 0;
         }
         if (!questions.length) return 0;
-        set((state) => ({
-          customExamQuestions: [...questions, ...state.customExamQuestions],
-          auditLogs: [
-            {
-              id: `aud-${Date.now()}`,
-              actor: state.currentUser?.email || 'admin',
-              action: 'GOOGLE_SHEETS_IMPORT_MCQS',
-              target: `${questions.length} Exam Questions`,
-              timestamp: new Date().toISOString().slice(0, 16).replace('T', ' '),
-            },
-            ...state.auditLogs,
-          ],
-        }));
-        if (role === 'admin') {
-          verifyServerAdminAction(
-            'BULK_IMPORT_EXAM_QUESTIONS',
-            { target: `${questions.length} Exam Questions` },
-            () => get().syncServerSession()
-          );
+        try {
+          if (role === 'admin') {
+            const res = await fetch('/api/admin/action', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'include',
+              body: JSON.stringify({
+                action: 'BULK_IMPORT_EXAM_QUESTIONS',
+                target: `${questions.length} Exam Questions`,
+                questions,
+              }),
+            });
+            const data = await res.json();
+            if (!res.ok || (!data.ok && !data.authorized)) {
+              return 0;
+            }
+          }
+          set((state) => ({
+            customExamQuestions: [...questions, ...state.customExamQuestions],
+            auditLogs: [
+              {
+                id: `aud-${Date.now()}`,
+                actor: state.currentUser?.email || 'admin',
+                action: 'GOOGLE_SHEETS_IMPORT_MCQS',
+                target: `${questions.length} Exam Questions`,
+                timestamp: new Date().toISOString().slice(0, 16).replace('T', ' '),
+              },
+              ...state.auditLogs,
+            ],
+          }));
+          return questions.length;
+        } catch {
+          return 0;
         }
-        return questions.length;
       },
 
-      deleteCustomExamQuestion: (id) => {
+      deleteCustomExamQuestion: async (id) => {
         if (get().currentUser?.role !== 'admin') {
           get().syncServerSession();
-          return;
+          return false;
         }
-        set((state) => ({
-          customExamQuestions: state.customExamQuestions.filter((q) => q.id !== id),
-        }));
-        verifyServerAdminAction(
-          'DELETE_EXAM_QUESTION',
-          { target: id },
-          () => get().syncServerSession()
-        );
+        try {
+          const res = await fetch('/api/admin/action', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              action: 'DELETE_EXAM_QUESTION',
+              target: id,
+              questionId: id,
+            }),
+          });
+          const data = await res.json();
+          if (res.ok && (data.ok || data.authorized)) {
+            set((state) => ({
+              customExamQuestions: state.customExamQuestions.filter((q) => q.id !== id),
+            }));
+            return true;
+          }
+          return false;
+        } catch {
+          return false;
+        }
       },
 
       importLeaderboardFromSheet: (students) => {
@@ -1101,28 +1496,42 @@ export const useUyanixStore = create<UyanixState>()(
           notifications: state.notifications.map((n) => ({ ...n, read: true })),
         })),
 
-      broadcastNotification: (title, body) => {
+      broadcastNotification: async (title, body) => {
         if (get().currentUser?.role !== 'admin') {
           get().syncServerSession();
-          return;
+          return { ok: false };
         }
-        set((state) => ({
-          notifications: [
-            {
-              id: `notif-${Date.now()}`,
+        try {
+          const res = await fetch('/api/admin/action', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({
+              action: 'BROADCAST_NOTIFICATION',
               title,
               body,
-              read: false,
-              createdAt: 'Broadcast • Just now',
-            },
-            ...state.notifications,
-          ],
-        }));
-        verifyServerAdminAction(
-          'BROADCAST_NOTIFICATION',
-          { target: title },
-          () => get().syncServerSession()
-        );
+            }),
+          });
+          const data = await res.json();
+          if (res.ok && (data.ok || data.authorized)) {
+            set((state) => ({
+              notifications: [
+                {
+                  id: data.notificationId || `notif-${Date.now()}`,
+                  title,
+                  body,
+                  read: false,
+                  createdAt: 'Broadcast • Just now',
+                },
+                ...state.notifications,
+              ],
+            }));
+            return { ok: true, recipientCount: data.recipientCount || 1 };
+          }
+          return { ok: false };
+        } catch {
+          return { ok: false };
+        }
       },
     }),
     {

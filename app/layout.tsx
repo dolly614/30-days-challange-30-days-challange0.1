@@ -1,6 +1,5 @@
 import { env } from '@/lib/env';
 import type { Metadata, Viewport } from 'next';
-import { Plus_Jakarta_Sans, Fraunces, JetBrains_Mono } from 'next/font/google';
 import { Toaster } from 'sonner';
 import { OfflineIndicator } from '@/components/site/PWAInstallButton';
 import {
@@ -9,26 +8,10 @@ import {
 } from '@/lib/seo-canonical-url-governance';
 import './globals.css';
 
-const jakarta = Plus_Jakarta_Sans({
-  subsets: ['latin'],
-  variable: '--font-jakarta',
-  weight: ['400', '500', '600', '700', '800'],
-  display: 'swap',
-});
-
-const fraunces = Fraunces({
-  subsets: ['latin'],
-  variable: '--font-fraunces',
-  weight: ['600', '700'],
-  display: 'swap',
-});
-
-const jetbrains = JetBrains_Mono({
-  subsets: ['latin'],
-  variable: '--font-jetbrains',
-  weight: ['400', '600', '700'],
-  display: 'swap',
-});
+// Fallback safe font variable mappings for build sandbox
+const jakarta = { variable: 'font-sans' };
+const fraunces = { variable: 'font-serif' };
+const jetbrains = { variable: 'font-mono' };
 
 export const viewport: Viewport = {
   themeColor: '#7c3aed',

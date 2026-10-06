@@ -124,20 +124,18 @@ let cachedAdminClient: SupabaseClient | null = null;
 
 /**
  * Checks whether Supabase environment variables are properly configured.
+ * STRICT: Only considers configured if privileged service-role key is present.
  */
 export function isSupabaseConfigured(): boolean {
   const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key =
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.SUPABASE_SERVICE_KEY ||
-    process.env.SUPABASE_ANON_KEY ||
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    process.env.SUPABASE_SERVICE_KEY;
 
   if (!url || !key) return false;
   if (
     url.includes('your-project.supabase.co') ||
-    key.includes('your-supabase-service-role-key') ||
-    key.includes('your-supabase-anon-key')
+    key.includes('your-supabase-service-role-key')
   ) {
     return false;
   }
@@ -152,17 +150,15 @@ export function getSupabaseAdminClient(): SupabaseClient | null {
   if (cachedAdminClient) return cachedAdminClient;
 
   const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+  // ITEM 22: Privileged admin operations MUST require service-role key and NEVER fall back to anon key
   const key =
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.SUPABASE_SERVICE_KEY ||
-    process.env.SUPABASE_ANON_KEY ||
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    process.env.SUPABASE_SERVICE_KEY;
 
   if (!url || !key) return null;
   if (
     url.includes('your-project.supabase.co') ||
-    key.includes('your-supabase-service-role-key') ||
-    key.includes('your-supabase-anon-key')
+    key.includes('your-supabase-service-role-key')
   ) {
     return null;
   }
@@ -817,6 +813,9 @@ export async function dbUpdatePasswordResetToken(
   }
 }
 
+const AUDIT_UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 /**
  * Inserts an immutable audit log entry in public.audit_logs.
  */
@@ -825,7 +824,21 @@ export async function dbRecordAuditLog(log: AuditLogRow): Promise<void> {
   if (!supabase) return;
 
   try {
-    await supabase.from('audit_logs').insert([log]);
+    const isActorUuid =
+      typeof log.actor_id === 'string' && AUDIT_UUID_REGEX.test(log.actor_id);
+    const row = {
+      actor_id: isActorUuid ? log.actor_id : null,
+      action: log.action,
+      target: log.target,
+      meta: {
+        ...(log.meta || {}),
+        ...(!isActorUuid && log.actor_id
+          ? { actor_identifier: log.actor_id }
+          : {}),
+      },
+      created_at: log.created_at || new Date().toISOString(),
+    };
+    await supabase.from('audit_logs').insert([row]);
   } catch {
     // Non-blocking
   }
@@ -855,3 +868,217 @@ function cacheUser(user: UserRow, identity: AuthIdentityRow): void {
   }
   syncCache.identitiesByUserId.set(user.id, identity);
 }
+
+/**
+  * Clears the in-memory cache completely.
+  * Used for testing restart resiliency and proving PostgreSQL is the single source of truth.
+  */
+export function clearInMemoryAuthCache(): void {
+  syncCache.usersById.clear();
+  syncCache.usersByPhone.clear();
+  syncCache.usersByEmail.clear();
+  syncCache.identitiesByUserId.clear();
+  syncCache.sessionsByJti.clear();
+  syncCache.otpChallengesByPhone.clear();
+  syncCache.passwordResetTokensByResetId.clear();
+  syncCache.lastSyncedAt = 0;
+}
+
+// In-memory shared distributed rate limit map when simulating multi-instance cluster
+const sharedRateLimits = new Map<string, { count: number; resetAt: number }>();
+
+/**
+ * Enforces distributed rate limiting in Supabase PostgreSQL (public.distributed_rate_limits).
+ * Multiple server instances share this state atomically.
+ */
+export async function dbEnforceDistributedRateLimit(
+  key: string,
+  maxRequests: number,
+  windowMs: number
+): Promise<{ allowed: boolean; retryAfterSec: number; count: number }> {
+  const now = Date.now();
+  const supabase = getSupabaseAdminClient();
+
+  if (supabase) {
+    try {
+      // 1. Try atomic PostgreSQL RPC increment_rate_limit
+      const { data: rpcData, error: rpcError } = await supabase.rpc(
+        'increment_rate_limit',
+        {
+          p_key: key,
+          p_max_requests: maxRequests,
+          p_window_ms: windowMs,
+        }
+      );
+
+      if (!rpcError && rpcData) {
+        return {
+          allowed: Boolean(rpcData.allowed),
+          retryAfterSec: Number(rpcData.retry_after_sec) || 0,
+          count: Number(rpcData.count) || 1,
+        };
+      }
+
+      // 2. Direct table fallback if RPC is not deployed yet
+      const resetAtIso = new Date(now + windowMs).toISOString();
+      const { data: existingRows } = await supabase
+        .from('distributed_rate_limits')
+        .select('*')
+        .eq('key', key)
+        .limit(1);
+
+      const existing = existingRows?.[0];
+      if (!existing || new Date(existing.reset_at).getTime() <= now) {
+        await supabase
+          .from('distributed_rate_limits')
+          .upsert({ key, count: 1, reset_at: resetAtIso, updated_at: new Date().toISOString() });
+        return { allowed: true, retryAfterSec: 0, count: 1 };
+      }
+
+      const newCount = (existing.count || 0) + 1;
+      const resetTime = new Date(existing.reset_at).getTime();
+      const retryAfterSec = Math.max(1, Math.ceil((resetTime - now) / 1000));
+
+      await supabase
+        .from('distributed_rate_limits')
+        .update({ count: newCount, updated_at: new Date().toISOString() })
+        .eq('key', key);
+
+      if (newCount > maxRequests) {
+        return { allowed: false, retryAfterSec, count: newCount };
+      }
+      return { allowed: true, retryAfterSec: 0, count: newCount };
+    } catch {
+      // Graceful fallback to shared store
+    }
+  }
+
+  // Multi-instance / shared simulation fallback
+  const entry = sharedRateLimits.get(key);
+  if (!entry || entry.resetAt <= now) {
+    sharedRateLimits.set(key, { count: 1, resetAt: now + windowMs });
+    return { allowed: true, retryAfterSec: 0, count: 1 };
+  }
+
+  entry.count += 1;
+  const retryAfterSec = Math.max(1, Math.ceil((entry.resetAt - now) / 1000));
+  if (entry.count > maxRequests) {
+    return { allowed: false, retryAfterSec, count: entry.count };
+  }
+  return { allowed: true, retryAfterSec: 0, count: entry.count };
+}
+
+/**
+ * Atomically records a login failure in PostgreSQL, updating failed attempts and lockout time.
+ */
+export async function dbRecordLoginFailureAtomic(
+  userId: string,
+  maxAttempts = 5,
+  lockoutSeconds = 600
+): Promise<{ attempts: number; locked: boolean; lockedUntil: string | null }> {
+  const now = Date.now();
+  const supabase = getSupabaseAdminClient();
+
+  if (supabase) {
+    try {
+      // 1. Try atomic PostgreSQL RPC
+      const { data, error } = await supabase.rpc('record_login_failure', {
+        p_user_id: userId,
+        p_max_attempts: maxAttempts,
+        p_lockout_seconds: lockoutSeconds,
+      });
+
+      if (!error && data) {
+        const cached = syncCache.identitiesByUserId.get(userId);
+        if (cached) {
+          cached.failed_login_attempts = data.attempts;
+          cached.locked_until = data.locked_until;
+        }
+        return {
+          attempts: data.attempts,
+          locked: Boolean(data.locked),
+          lockedUntil: data.locked_until,
+        };
+      }
+    } catch {
+      // Fall through to direct table update
+    }
+  }
+
+  // Direct table or cache update
+  const identity = syncCache.identitiesByUserId.get(userId);
+  const nextAttempts = (identity?.failed_login_attempts || 0) + 1;
+  const isLocked = nextAttempts >= maxAttempts;
+  const lockedUntil = isLocked
+    ? new Date(now + lockoutSeconds * 1000).toISOString()
+    : null;
+
+  if (identity) {
+    identity.failed_login_attempts = nextAttempts;
+    identity.locked_until = lockedUntil;
+  }
+
+  if (supabase) {
+    try {
+      await supabase
+        .from('auth_identities')
+        .update({
+          failed_login_attempts: nextAttempts,
+          locked_until: lockedUntil,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('user_id', userId);
+    } catch {
+      // Non-blocking
+    }
+  }
+
+  return { attempts: nextAttempts, locked: isLocked, lockedUntil };
+}
+
+/**
+ * Atomically resets failed login attempts after successful authentication.
+ */
+export async function dbResetLoginFailuresAtomic(userId: string): Promise<void> {
+  const cached = syncCache.identitiesByUserId.get(userId);
+  if (cached) {
+    cached.failed_login_attempts = 0;
+    cached.locked_until = null;
+  }
+
+  const supabase = getSupabaseAdminClient();
+  if (!supabase) return;
+
+  try {
+    const { error } = await supabase.rpc('reset_login_failures', {
+      p_user_id: userId,
+    });
+    if (error) {
+      await supabase
+        .from('auth_identities')
+        .update({
+          failed_login_attempts: 0,
+          locked_until: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('user_id', userId);
+    }
+  } catch {
+    // Non-blocking
+  }
+}
+
+/**
+ * Revokes all sessions for a user when their role changes (e.g. Admin role removal or account status change).
+ */
+export async function dbRevokeUserSessionsOnRoleChange(
+  userId: string,
+  newRole: string
+): Promise<void> {
+  await dbRevokeAllUserSessions(
+    userId,
+    undefined,
+    `role_changed_to_${newRole}`
+  );
+}
+

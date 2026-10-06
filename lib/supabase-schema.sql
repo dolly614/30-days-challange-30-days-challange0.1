@@ -9,9 +9,9 @@ CREATE TABLE public.users (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   name TEXT NOT NULL CHECK (char_length(trim(name)) BETWEEN 2 AND 100),
   email TEXT UNIQUE,
-  phone TEXT UNIQUE NOT NULL CHECK (phone ~ '^[6-9][0-9]{9}$'),
-  class INTEGER NOT NULL CHECK (class BETWEEN 1 AND 12),
-  school TEXT NOT NULL CHECK (char_length(trim(school)) BETWEEN 2 AND 160),
+  phone TEXT UNIQUE CHECK (phone IS NULL OR phone ~ '^[6-9][0-9]{9}$'),
+  class INTEGER CHECK (class IS NULL OR (class BETWEEN 1 AND 12)),
+  school TEXT CHECK (school IS NULL OR (char_length(trim(school)) BETWEEN 2 AND 160)),
   city TEXT DEFAULT 'Jaipur',
   role TEXT NOT NULL DEFAULT 'student' CHECK (role IN ('student', 'teacher', 'admin')),
   avatar TEXT,
@@ -78,7 +78,7 @@ ALTER TABLE public.user_sessions ENABLE ROW LEVEL SECURITY;
 CREATE TABLE IF NOT EXISTS public.auth_identities (
   user_id UUID PRIMARY KEY REFERENCES public.users(id) ON DELETE CASCADE,
   normalized_email TEXT,
-  normalized_phone TEXT NOT NULL,
+  normalized_phone TEXT,
   password_salt TEXT,
   password_hash TEXT,
   password_changed_at TIMESTAMPTZ,
@@ -243,6 +243,127 @@ CREATE TABLE public.audit_logs (
 );
 
 -- ============================================================================
+-- PHASE 4: PRODUCTION EXAM ENGINE TABLES & STATE MACHINE
+-- ============================================================================
+
+-- 13. EXAM DEFINITIONS TABLE
+CREATE TABLE IF NOT EXISTS public.exam_definitions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  type TEXT NOT NULL UNIQUE CHECK (type IN ('mid', 'final')),
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'LIVE' CHECK (status IN ('DRAFT', 'SCHEDULED', 'LIVE', 'PAUSED', 'ENDED', 'ARCHIVED')),
+  allowed_classes INTEGER[] NOT NULL DEFAULT ARRAY[1,2,3,4,5,6,7,8,9,10,11,12],
+  duration_seconds INTEGER NOT NULL DEFAULT 2700 CHECK (duration_seconds > 0),
+  total_questions INTEGER NOT NULL DEFAULT 150 CHECK (total_questions > 0),
+  maximum_marks INTEGER NOT NULL DEFAULT 150 CHECK (maximum_marks > 0),
+  marking_scheme JSONB NOT NULL DEFAULT '{"correct": 1, "incorrect": 0, "unanswered": 0}'::jsonb,
+  start_at TIMESTAMPTZ,
+  end_at TIMESTAMPTZ,
+  attempt_limit INTEGER NOT NULL DEFAULT 1 CHECK (attempt_limit >= 1),
+  requires_payment BOOLEAN NOT NULL DEFAULT TRUE,
+  minimum_completed_days INTEGER NOT NULL DEFAULT 0,
+  question_version INTEGER NOT NULL DEFAULT 1,
+  published_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 14. EXAM QUESTIONS TABLE (Authoritative Question Bank)
+CREATE TABLE IF NOT EXISTS public.exam_questions (
+  id TEXT PRIMARY KEY,
+  exam_type TEXT NOT NULL CHECK (exam_type IN ('mid', 'final')),
+  question_text TEXT NOT NULL,
+  option_a TEXT NOT NULL,
+  option_b TEXT NOT NULL,
+  option_c TEXT NOT NULL,
+  option_d TEXT NOT NULL,
+  correct_option INTEGER NOT NULL CHECK (correct_option BETWEEN 0 AND 3),
+  explanation TEXT NOT NULL,
+  topic TEXT NOT NULL DEFAULT 'General',
+  class_num INTEGER DEFAULT 12,
+  question_version INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 15. EXAM ATTEMPTS TABLE (Authoritative Attempts, Snapshot & Evaluated Results)
+CREATE TABLE IF NOT EXISTS public.exam_attempts (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  exam_type TEXT NOT NULL CHECK (exam_type IN ('mid', 'final')),
+  student_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+  student_class INTEGER NOT NULL CHECK (student_class BETWEEN 1 AND 12),
+  student_name TEXT NOT NULL,
+  attempt_number INTEGER NOT NULL DEFAULT 1 CHECK (attempt_number >= 1),
+  status TEXT NOT NULL DEFAULT 'IN_PROGRESS' CHECK (status IN ('NOT_STARTED', 'IN_PROGRESS', 'SUBMITTED', 'AUTO_SUBMITTED', 'EVALUATED', 'CANCELLED', 'EXPIRED', 'INVALIDATED')),
+  question_version INTEGER NOT NULL DEFAULT 1,
+  question_snapshot JSONB NOT NULL DEFAULT '[]'::jsonb,
+  marking_scheme_snapshot JSONB NOT NULL DEFAULT '{"correct": 1, "incorrect": 0}'::jsonb,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deadline_at TIMESTAMPTZ NOT NULL,
+  submitted_at TIMESTAMPTZ,
+  finalized_at TIMESTAMPTZ,
+  score INTEGER NOT NULL DEFAULT 0 CHECK (score >= 0),
+  maximum_score INTEGER NOT NULL DEFAULT 150 CHECK (maximum_score > 0),
+  percentage NUMERIC(5, 2) NOT NULL DEFAULT 0.00 CHECK (percentage BETWEEN 0 AND 100),
+  correct_count INTEGER NOT NULL DEFAULT 0 CHECK (correct_count >= 0),
+  wrong_count INTEGER NOT NULL DEFAULT 0 CHECK (wrong_count >= 0),
+  unanswered_count INTEGER NOT NULL DEFAULT 0 CHECK (unanswered_count >= 0),
+  rank INTEGER,
+  certificate_eligible BOOLEAN NOT NULL DEFAULT FALSE,
+  result_version INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(student_id, exam_type, attempt_number)
+);
+
+-- 16. EXAM ATTEMPT ANSWERS TABLE (Autosaved Answers per Question)
+CREATE TABLE IF NOT EXISTS public.exam_attempt_answers (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  attempt_id UUID NOT NULL REFERENCES public.exam_attempts(id) ON DELETE CASCADE,
+  question_id TEXT NOT NULL,
+  selected_option INTEGER NOT NULL CHECK (selected_option BETWEEN 0 AND 3),
+  saved_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(attempt_id, question_id)
+);
+
+-- 17. EXAM IDEMPOTENCY KEYS TABLE
+CREATE TABLE IF NOT EXISTS public.exam_idempotency_keys (
+  key TEXT PRIMARY KEY,
+  user_id UUID NOT NULL,
+  attempt_id UUID,
+  operation TEXT NOT NULL,
+  response_payload JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL
+);
+
+-- 18. EXAM VIOLATION EVENTS TABLE
+CREATE TABLE IF NOT EXISTS public.exam_violation_events (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  attempt_id UUID NOT NULL REFERENCES public.exam_attempts(id) ON DELETE CASCADE,
+  student_id UUID NOT NULL,
+  event_type TEXT NOT NULL,
+  metadata JSONB DEFAULT '{}'::jsonb,
+  server_timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  request_id TEXT
+);
+
+-- 19. EXAM RESULT EVENTS TABLE (Audit Trail for Evaluations & Admin Corrections)
+CREATE TABLE IF NOT EXISTS public.exam_result_events (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  attempt_id UUID NOT NULL REFERENCES public.exam_attempts(id) ON DELETE CASCADE,
+  student_id UUID NOT NULL,
+  event_type TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  reason TEXT,
+  old_result JSONB,
+  new_result JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- ============================================================================
 -- TRUSTED SERVER-SIDE ROLE HELPER
 -- ============================================================================
 
@@ -308,11 +429,15 @@ CREATE POLICY "Only admins can insert update or delete chapters"
   USING (public.get_my_role() = 'admin')
   WITH CHECK (public.get_my_role() = 'admin');
 
--- DAILY PROGRESS: Students manage own progress; Admin can view all
-CREATE POLICY "Students manage own daily progress"
+-- DAILY PROGRESS: Students view own progress only (read-only); Admin manages all; Server inserts via service-role
+CREATE POLICY "Students view own daily progress"
+  ON public.daily_progress FOR SELECT
+  USING (auth.uid() = user_id OR public.get_my_role() = 'admin');
+
+CREATE POLICY "Admin manages daily progress"
   ON public.daily_progress FOR ALL
-  USING (auth.uid() = user_id OR public.get_my_role() = 'admin')
-  WITH CHECK (auth.uid() = user_id OR public.get_my_role() = 'admin');
+  USING (public.get_my_role() = 'admin')
+  WITH CHECK (public.get_my_role() = 'admin');
 
 -- EXAMS: Students view and create own exams; Admin manages all
 CREATE POLICY "Students view own exams"
@@ -865,5 +990,187 @@ CREATE INDEX IF NOT EXISTS idx_user_consents_user_type_ts ON public.user_consent
 CREATE INDEX IF NOT EXISTS idx_privacy_exports_owner_status ON public.privacy_data_exports(owner_user_id, status, expires_at);
 CREATE INDEX IF NOT EXISTS idx_google_sync_jobs_owner_domain ON public.google_sync_jobs(owner_id, domain, status);
 CREATE INDEX IF NOT EXISTS idx_retention_holds_target_status ON public.privacy_retention_holds(target_user_id, status);
+CREATE INDEX IF NOT EXISTS idx_auth_identities_email ON public.auth_identities(normalized_email);
+CREATE INDEX IF NOT EXISTS idx_auth_identities_phone ON public.auth_identities(normalized_phone);
+CREATE INDEX IF NOT EXISTS idx_user_sessions_family ON public.user_sessions(family_id);
+
+-- ============================================================================
+-- 18. DISTRIBUTED RATE LIMITING TABLE & ATOMIC RPC (PHASE 2 HARDENING)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS public.distributed_rate_limits (
+  key TEXT PRIMARY KEY,
+  count INTEGER NOT NULL DEFAULT 1,
+  reset_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE public.distributed_rate_limits ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Distributed rate limits are server-only access"
+  ON public.distributed_rate_limits FOR ALL
+  USING (public.get_my_role() = 'admin')
+  WITH CHECK (public.get_my_role() = 'admin');
+
+CREATE OR REPLACE FUNCTION public.increment_rate_limit(
+  p_key TEXT,
+  p_max_requests INTEGER,
+  p_window_ms BIGINT,
+  p_now TIMESTAMPTZ DEFAULT NOW()
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_rec public.distributed_rate_limits%ROWTYPE;
+  v_new_reset TIMESTAMPTZ;
+  v_retry_after INTEGER;
+BEGIN
+  v_new_reset := p_now + (p_window_ms || ' milliseconds')::INTERVAL;
+  
+  INSERT INTO public.distributed_rate_limits (key, count, reset_at, updated_at)
+  VALUES (p_key, 1, v_new_reset, p_now)
+  ON CONFLICT (key) DO UPDATE
+    SET count = CASE
+                  WHEN public.distributed_rate_limits.reset_at <= p_now THEN 1
+                  ELSE public.distributed_rate_limits.count + 1
+                END,
+        reset_at = CASE
+                     WHEN public.distributed_rate_limits.reset_at <= p_now THEN v_new_reset
+                     ELSE public.distributed_rate_limits.reset_at
+                   END,
+        updated_at = p_now
+  RETURNING * INTO v_rec;
+
+  IF v_rec.count > p_max_requests THEN
+    v_retry_after := GREATEST(1, CEIL(EXTRACT(EPOCH FROM (v_rec.reset_at - p_now)))::INTEGER);
+    RETURN jsonb_build_object('allowed', FALSE, 'retry_after_sec', v_retry_after, 'count', v_rec.count);
+  ELSE
+    RETURN jsonb_build_object('allowed', TRUE, 'retry_after_sec', 0, 'count', v_rec.count);
+  END IF;
+END;
+$$;
+
+-- ============================================================================
+-- 19. ATOMIC LOGIN FAILURE & LOCKOUT RPC (PHASE 2 HARDENING)
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION public.record_login_failure(
+  p_user_id UUID,
+  p_max_attempts INTEGER DEFAULT 5,
+  p_lockout_seconds INTEGER DEFAULT 600
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_new_attempts INTEGER;
+  v_locked_until TIMESTAMPTZ := NULL;
+  v_now TIMESTAMPTZ := NOW();
+BEGIN
+  SELECT failed_login_attempts + 1 INTO v_new_attempts
+  FROM public.auth_identities
+  WHERE user_id = p_user_id;
+
+  IF NOT FOUND THEN
+    v_new_attempts := 1;
+  END IF;
+
+  IF v_new_attempts >= p_max_attempts THEN
+    v_locked_until := v_now + (p_lockout_seconds || ' seconds')::INTERVAL;
+  END IF;
+
+  UPDATE public.auth_identities
+  SET failed_login_attempts = v_new_attempts,
+      locked_until = v_locked_until,
+      updated_at = v_now
+  WHERE user_id = p_user_id;
+
+  RETURN jsonb_build_object(
+    'attempts', v_new_attempts,
+    'locked', (v_locked_until IS NOT NULL),
+    'locked_until', v_locked_until
+  );
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.reset_login_failures(
+  p_user_id UUID
+)
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  UPDATE public.auth_identities
+  SET failed_login_attempts = 0,
+      locked_until = NULL,
+      updated_at = NOW()
+  WHERE user_id = p_user_id;
+END;
+$$;
+
+-- ============================================================================
+-- PHASE 4: INDEXES & RLS POLICIES FOR EXAM TABLES
+-- ============================================================================
+
+CREATE INDEX IF NOT EXISTS idx_exam_attempts_student_exam ON public.exam_attempts(student_id, exam_type);
+CREATE INDEX IF NOT EXISTS idx_exam_attempts_status ON public.exam_attempts(status);
+CREATE INDEX IF NOT EXISTS idx_exam_attempts_deadline ON public.exam_attempts(deadline_at);
+CREATE INDEX IF NOT EXISTS idx_exam_attempt_answers_attempt ON public.exam_attempt_answers(attempt_id);
+CREATE INDEX IF NOT EXISTS idx_exam_violation_events_attempt ON public.exam_violation_events(attempt_id);
+CREATE INDEX IF NOT EXISTS idx_exam_attempts_ranking ON public.exam_attempts(exam_type, status, score DESC, finalized_at ASC);
+CREATE INDEX IF NOT EXISTS idx_exam_questions_type ON public.exam_questions(exam_type, status);
+
+ALTER TABLE public.exam_definitions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.exam_questions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.exam_attempts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.exam_attempt_answers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.exam_idempotency_keys ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.exam_violation_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.exam_result_events ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Students view exam definitions" ON public.exam_definitions
+  FOR SELECT USING (status = 'LIVE' OR public.get_my_role() = 'admin');
+
+CREATE POLICY "Admin manage exam definitions" ON public.exam_definitions
+  FOR ALL USING (public.get_my_role() = 'admin') WITH CHECK (public.get_my_role() = 'admin');
+
+CREATE POLICY "Admin manage questions" ON public.exam_questions
+  FOR ALL USING (public.get_my_role() = 'admin') WITH CHECK (public.get_my_role() = 'admin');
+
+CREATE POLICY "Students view own exam attempts" ON public.exam_attempts
+  FOR SELECT USING (auth.uid() = student_id OR public.get_my_role() = 'admin');
+
+CREATE POLICY "Admin manage exam attempts" ON public.exam_attempts
+  FOR ALL USING (public.get_my_role() = 'admin') WITH CHECK (public.get_my_role() = 'admin');
+
+CREATE POLICY "Students view own attempt answers" ON public.exam_attempt_answers
+  FOR SELECT USING (EXISTS (SELECT 1 FROM public.exam_attempts WHERE exam_attempts.id = exam_attempt_answers.attempt_id AND exam_attempts.student_id = auth.uid()) OR public.get_my_role() = 'admin');
+
+CREATE POLICY "Admin manage attempt answers" ON public.exam_attempt_answers
+  FOR ALL USING (public.get_my_role() = 'admin') WITH CHECK (public.get_my_role() = 'admin');
+
+CREATE POLICY "Students view own violations" ON public.exam_violation_events
+  FOR SELECT USING (auth.uid() = student_id OR public.get_my_role() = 'admin');
+
+CREATE POLICY "Admin manage violations" ON public.exam_violation_events
+  FOR ALL USING (public.get_my_role() = 'admin') WITH CHECK (public.get_my_role() = 'admin');
+
+CREATE POLICY "Admin manage result events" ON public.exam_result_events
+  FOR ALL USING (public.get_my_role() = 'admin') WITH CHECK (public.get_my_role() = 'admin');
+
+-- Seed standard exam definitions
+INSERT INTO public.exam_definitions (type, title, status, duration_seconds, total_questions, maximum_marks, attempt_limit, requires_payment)
+VALUES 
+  ('mid', '15-Day Mid Challenge Exam', 'LIVE', 2700, 150, 150, 1, TRUE),
+  ('final', '30-Day Grand Finale Exam', 'LIVE', 2700, 150, 150, 1, TRUE)
+ON CONFLICT (type) DO NOTHING;
+
+
 
 

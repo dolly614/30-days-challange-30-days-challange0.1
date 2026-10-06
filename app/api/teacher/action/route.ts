@@ -1,10 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
+  enforceDistributedRateLimit,
   enforceRateLimit,
   getClientIp,
   recordServerAuditLog,
   requireTeacherOrAdmin,
 } from '@/lib/server-auth';
+import {
+  authoritativeRequestWithdrawal,
+  getAuthoritativeTeacher,
+} from '@/lib/financial-authoritative-service';
+import { getSupabaseAdminClient } from '@/lib/supabase-server';
 
 const ALLOWED_TEACHER_ACTIONS = new Set([
   'REQUEST_WITHDRAWAL',
@@ -12,13 +18,91 @@ const ALLOWED_TEACHER_ACTIONS = new Set([
   'SIMULATE_REFERRAL',
 ]);
 
+export async function GET(req: NextRequest) {
+  const guard = requireTeacherOrAdmin(req);
+  if (!guard.ok) {
+    return guard.response;
+  }
+
+  try {
+    const teacher = await getAuthoritativeTeacher(guard.user.id, {
+      name: guard.user.name,
+      email: guard.user.email,
+    });
+
+    const supabase = getSupabaseAdminClient();
+    let withdrawals: Array<{
+      id: string;
+      teacherId: string;
+      amount: number;
+      method: string;
+      destination: string;
+      status: string;
+      date: string;
+      invoiceId: string;
+    }> = [];
+
+    if (supabase) {
+      try {
+        const { data: wList } = await supabase
+          .from('withdrawals')
+          .select('id, amount, method, upi_id, status, created_at')
+          .eq('teacher_id', teacher.id)
+          .order('created_at', { ascending: false });
+
+        if (wList) {
+          withdrawals = wList.map((w) => ({
+            id: w.id,
+            teacherId: teacher.id,
+            amount: w.amount,
+            method: w.method,
+            destination: w.upi_id,
+            status: w.status,
+            date: w.created_at ? w.created_at.slice(0, 10) : new Date().toISOString().slice(0, 10),
+            invoiceId: `INV_${w.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8).toUpperCase()}`,
+          }));
+        }
+      } catch {
+        // fallback
+      }
+    }
+
+    return NextResponse.json({
+      ok: true,
+      teacher: {
+        id: teacher.id,
+        userId: teacher.userId,
+        name: guard.user.name,
+        email: guard.user.email,
+        code: teacher.referralCode,
+        tier: teacher.tier,
+        balance: teacher.balance,
+        totalEarned: teacher.totalEarned,
+        kycPan: teacher.kycPan,
+        kycVerified: teacher.kycVerified,
+        status: teacher.status,
+        upiId: teacher.upiId,
+      },
+      withdrawals,
+    });
+  } catch {
+    return NextResponse.json(
+      { error: 'Failed to retrieve authoritative teacher state.' },
+      { status: 500 }
+    );
+  }
+}
+
 export async function POST(req: NextRequest) {
   const ip = getClientIp(req);
-  const rate = enforceRateLimit(`teacher-action:${ip}`, 30, 5 * 60 * 1000);
+  const rate = await enforceDistributedRateLimit(`teacher-action:${ip}`, 30, 5 * 60 * 1000);
   if (!rate.allowed) {
     return NextResponse.json(
       { error: 'Too many requests. Please wait before trying again.' },
-      { status: 429 }
+      {
+        status: 429,
+        headers: { 'Retry-After': String(rate.retryAfterSec) },
+      }
     );
   }
 
@@ -66,28 +150,35 @@ export async function POST(req: NextRequest) {
         typeof body?.destination === 'string'
           ? body.destination.trim().slice(0, 120)
           : '';
+      const idempotencyKey =
+        typeof body?.idempotencyKey === 'string'
+          ? body.idempotencyKey.trim()
+          : req.headers.get('x-idempotency-key') || undefined;
 
-      if (!Number.isFinite(amount) || amount < 500 || !destination) {
+      const result = await authoritativeRequestWithdrawal({
+        userId: guard.user.id,
+        userEmail: guard.user.email,
+        amount,
+        method,
+        destination,
+        idempotencyKey,
+      });
+
+      if (!result.ok) {
         return NextResponse.json(
-          { error: 'Minimum ₹500 withdrawal amount and valid destination required.' },
-          { status: 400 }
+          { error: result.error },
+          { status: result.status }
         );
       }
 
-      const audit = recordServerAuditLog({
-        actorId: guard.user.id,
-        actorEmail: guard.user.email,
-        actorRole: guard.user.role,
-        action: 'TEACHER_REQUEST_WITHDRAWAL',
-        target: `${method}:${destination} (INR ${amount})`,
-      });
-
       return NextResponse.json({
         authorized: true,
+        ok: true,
         action,
         teacherId: guard.user.id,
+        withdrawal: result.withdrawal,
+        newBalance: result.newBalance,
         status: 'pending',
-        audit,
       });
     }
 
@@ -110,6 +201,23 @@ export async function POST(req: NextRequest) {
       const approvedStatus =
         guard.user.role === 'admin' ? 'approved' : 'pending';
 
+      const supabase = getSupabaseAdminClient();
+      if (supabase) {
+        try {
+          await supabase
+            .from('teachers')
+            .update({
+              kyc_pan: pan,
+              upi_id: upiId,
+              kyc_verified: guard.user.role === 'admin',
+              status: approvedStatus,
+            })
+            .eq('user_id', guard.user.id);
+        } catch {
+          // fallback handled
+        }
+      }
+
       const audit = recordServerAuditLog({
         actorId: guard.user.id,
         actorEmail: guard.user.email,
@@ -120,6 +228,7 @@ export async function POST(req: NextRequest) {
 
       return NextResponse.json({
         authorized: true,
+        ok: true,
         action,
         teacherId: guard.user.id,
         status: approvedStatus,
@@ -139,20 +248,11 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const audit = recordServerAuditLog({
-      actorId: guard.user.id,
-      actorEmail: guard.user.email,
-      actorRole: guard.user.role,
-      action: `TEACHER_${action}`,
-      target: guard.user.id,
-    });
-
     return NextResponse.json({
       authorized: true,
       action,
       teacherId: guard.user.id,
       role: guard.user.role,
-      audit,
     });
   } catch {
     return NextResponse.json(

@@ -629,7 +629,7 @@ export function GoogleSheetsHub() {
     );
   };
 
-  const handleImportChaptersFromSheet = () => {
+  const handleImportChaptersFromSheet = async () => {
     if (gridRows.length < 2) {
       toast.error(
         'Selected sheet tab needs a header row and at least 1 chapter row.'
@@ -657,9 +657,9 @@ export function GoogleSheetsHub() {
       });
     });
 
-    Object.entries(byClass).forEach(([clsStr, items]) => {
-      totalImported += bulkSaveChapters(Number(clsStr), items, true);
-    });
+    for (const [clsStr, items] of Object.entries(byClass)) {
+      totalImported += await bulkSaveChapters(Number(clsStr), items, true);
+    }
 
     if (totalImported === 0) {
       toast.error('No valid chapter rows (Class, Day, Title, Content) found.');

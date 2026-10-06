@@ -1,12 +1,39 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { useUyanixStore } from '@/lib/store';
 import { toast } from 'sonner';
 
 export function StudentVerifications() {
-  const { verifications, handleVerification } = useUyanixStore();
+  const { verifications, handleVerification, syncAdminVerifications } = useUyanixStore();
+  const [processingId, setProcessingId] = useState<string | null>(null);
+
+  React.useEffect(() => {
+    syncAdminVerifications();
+  }, [syncAdminVerifications]);
+
   const pendingList = verifications.filter((v) => v.status === 'pending');
+
+  const onVerificationAction = async (id: string, status: 'approved' | 'rejected', studentName: string) => {
+    if (processingId) return;
+    setProcessingId(id);
+    try {
+      const success = await handleVerification(id, status);
+      if (success) {
+        if (status === 'approved') {
+          toast.success(`Approved ${studentName}'s Student ID ✅`);
+        } else {
+          toast.info(`Rejected ${studentName}'s Student ID`);
+        }
+      } else {
+        toast.error(`Failed to update verification for ${studentName}`);
+      }
+    } catch {
+      toast.error('Network error updating verification');
+    } finally {
+      setProcessingId(null);
+    }
+  };
 
   return (
     <div className="mt-8 rounded-3xl border border-border bg-card p-6 shadow-card">
@@ -40,23 +67,19 @@ export function StudentVerifications() {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    handleVerification(v.id, 'approved');
-                    toast.success(`Approved ${v.studentName}'s Student ID`);
-                  }}
-                  className="rounded-full bg-secondary px-4 py-1.5 text-xs font-semibold text-secondary-foreground"
+                  disabled={processingId === v.id}
+                  onClick={() => onVerificationAction(v.id, 'approved', v.studentName)}
+                  className="rounded-full bg-secondary px-4 py-1.5 text-xs font-semibold text-secondary-foreground disabled:opacity-50"
                 >
-                  Approve
+                  {processingId === v.id ? 'Updating...' : 'Approve'}
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    handleVerification(v.id, 'rejected');
-                    toast.error(`Rejected ${v.studentName}'s ID`);
-                  }}
-                  className="rounded-full border border-destructive px-4 py-1.5 text-xs font-semibold text-destructive"
+                  disabled={processingId === v.id}
+                  onClick={() => onVerificationAction(v.id, 'rejected', v.studentName)}
+                  className="rounded-full border border-destructive px-4 py-1.5 text-xs font-semibold text-destructive disabled:opacity-50"
                 >
-                  Reject
+                  {processingId === v.id ? 'Updating...' : 'Reject'}
                 </button>
               </div>
             </div>

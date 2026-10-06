@@ -10,6 +10,7 @@ import {
   executeControlledFileUpload,
   FileUploadPurpose,
 } from '@/lib/file-security-governance';
+import { getSupabaseAdminClient } from '@/lib/supabase-server';
 
 export async function GET(req: NextRequest) {
   const authGuard = requireAuthenticatedUser(req);
@@ -140,6 +141,36 @@ export async function POST(req: NextRequest) {
           },
           { status: uploadResult.httpStatus }
         );
+      }
+
+      const supabase = getSupabaseAdminClient();
+      if (supabase) {
+        try {
+          await supabase.from('verification_submissions').upsert(
+            {
+              user_id: guard.user.id,
+              preserved_student_ref:
+                guard.user.email || guard.user.phone || guard.user.id,
+              class: guard.user.classNum || 10,
+              school: (guard.user.school || 'Verified School').slice(0, 160),
+              document_reference: documentName.trim(),
+              status: 'pending',
+              submitted_at: new Date().toISOString(),
+              version: 1,
+            },
+            { onConflict: 'user_id' }
+          );
+
+          await supabase
+            .from('users')
+            .update({
+              id_verification_status: 'pending',
+              id_card_url: uploadResult.fileRecord.file_id,
+            })
+            .eq('id', guard.user.id);
+        } catch {
+          // non-blocking fallback
+        }
       }
 
       return NextResponse.json(

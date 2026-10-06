@@ -22,7 +22,15 @@ import { toast } from 'sonner';
 
 export default function DashboardPage() {
   const router = useRouter();
-  const { currentUser, completedDays, leaderboard, updateProfile, syncServerSession } = useUyanixStore();
+  const {
+    currentUser,
+    completedDays,
+    leaderboard,
+    updateProfile,
+    syncServerSession,
+    syncStudentProgress,
+    syncLeaderboard,
+  } = useUyanixStore();
   const [chapterSearch, setChapterSearch] = useState('');
 
   useEffect(() => {
@@ -30,12 +38,15 @@ export default function DashboardPage() {
     syncServerSession().then((serverUser) => {
       if (active && !serverUser) {
         router.replace('/login?redirect=/dashboard');
+      } else if (active && serverUser) {
+        syncStudentProgress();
+        syncLeaderboard();
       }
     });
     return () => {
       active = false;
     };
-  }, [syncServerSession, router]);
+  }, [syncServerSession, syncStudentProgress, syncLeaderboard, router]);
 
   const userClass = currentUser?.classNum || 12;
   const userName = currentUser?.name || 'dollysingh';

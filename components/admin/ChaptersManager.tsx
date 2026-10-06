@@ -1,16 +1,18 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { BookOpen, Upload, Save, FileText } from 'lucide-react';
+import { BookOpen, Upload, Save, FileText, Loader2 } from 'lucide-react';
 import { useUyanixStore } from '@/lib/store';
 import { getTopicsForClass } from '@/lib/curriculum';
 import { toast } from 'sonner';
 
 export function ChaptersManager() {
-  const { savedChapters, saveChapter } = useUyanixStore();
+  const { savedChapters, saveChapter, refreshChapters } = useUyanixStore();
 
   const [selectedClass, setSelectedClass] = useState(1);
   const [selectedDay, setSelectedDay] = useState(1);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isParsingPdf, setIsParsingPdf] = useState(false);
 
   const topics = getTopicsForClass(selectedClass);
   const currentKey = `${selectedClass}-${selectedDay}`;
@@ -19,16 +21,81 @@ export function ChaptersManager() {
   const [title, setTitle] = useState(existingOverride?.title || '');
   const [content, setContent] = useState(existingOverride?.content || '');
 
+  // Synchronize chapters from server on mount
+  useEffect(() => {
+    refreshChapters(selectedClass);
+  }, [refreshChapters, selectedClass]);
+
   useEffect(() => {
     const over = savedChapters[`${selectedClass}-${selectedDay}`];
     setTitle(over?.title || '');
     setContent(over?.content || '');
   }, [selectedClass, selectedDay, savedChapters]);
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    if (isSaving) return;
+    setIsSaving(true);
     const finalTitle = title.trim() || topics[selectedDay - 1] || `Day ${selectedDay}`;
-    saveChapter(selectedClass, selectedDay, finalTitle, content);
-    toast.success(`Saved Class ${selectedClass} • Day ${selectedDay} (${finalTitle})! ✅`);
+    try {
+      const success = await saveChapter(selectedClass, selectedDay, finalTitle, content);
+      if (success) {
+        toast.success(`Saved Class ${selectedClass} • Day ${selectedDay} (${finalTitle})! ✅`);
+      } else {
+        toast.error('Failed to save chapter to authoritative database.');
+      }
+    } catch {
+      toast.error('Network error saving chapter.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
+      toast.error('Please upload a valid PDF file.');
+      return;
+    }
+
+    if (file.size > 15 * 1024 * 1024) {
+      toast.error('PDF exceeds maximum 15MB size limit.');
+      return;
+    }
+
+    setIsParsingPdf(true);
+    const toastId = toast.loading(`Parsing "${file.name}" on server...`);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const res = await fetch('/api/admin/chapters/parse-pdf', {
+        method: 'POST',
+        credentials: 'include',
+        body: formData,
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        toast.error(data.error || 'Failed to extract text from PDF', { id: toastId });
+        return;
+      }
+
+      const baseTitle = topics[selectedDay - 1] || `Day ${selectedDay}`;
+      if (!title) setTitle(baseTitle);
+      setContent(data.text);
+      toast.success(
+        `Extracted ${data.pageCount} page(s) from "${file.name}" (${data.text.length} characters)! Ready for review.`,
+        { id: toastId }
+      );
+    } catch {
+      toast.error('Network failure during PDF extraction', { id: toastId });
+    } finally {
+      setIsParsingPdf(false);
+      e.target.value = '';
+    }
   };
 
   const getClassCoverage = (c: number) => {
@@ -99,22 +166,22 @@ export function ChaptersManager() {
       </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-3">
-        <label className="inline-flex h-11 cursor-pointer items-center gap-2 rounded-full bg-primary px-5 text-sm font-semibold text-primary-foreground shadow-soft hover:opacity-90">
-          <Upload className="h-4 w-4" aria-hidden="true" />
-          Upload PDF
+        <label
+          className={`inline-flex h-11 cursor-pointer items-center gap-2 rounded-full bg-primary px-5 text-sm font-semibold text-primary-foreground shadow-soft hover:opacity-90 ${
+            isParsingPdf ? 'opacity-50 pointer-events-none' : ''
+          }`}
+        >
+          {isParsingPdf ? (
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+          ) : (
+            <Upload className="h-4 w-4" aria-hidden="true" />
+          )}
+          {isParsingPdf ? 'Extracting Text...' : 'Upload PDF'}
           <input
             accept="application/pdf"
             type="file"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (!file) return;
-              const baseTitle = topics[selectedDay - 1] || `Day ${selectedDay}`;
-              if (!title) setTitle(baseTitle);
-              setContent(
-                `# ${baseTitle} (Extracted from ${file.name})\n\nComplete Hinglish notes and solved examples for Class ${selectedClass}, Day ${selectedDay}.`
-              );
-              toast.success(`PDF "${file.name}" parsed and auto-filled!`);
-            }}
+            disabled={isParsingPdf}
+            onChange={handlePdfUpload}
             className="hidden"
           />
         </label>
@@ -132,7 +199,7 @@ export function ChaptersManager() {
           rows={12}
           value={content}
           onChange={(e) => setContent(e.target.value)}
-          className="mt-1 w-full rounded-xl border border-input bg-background p-4 text-sm outline-none focus:border-primary"
+          className="mt-1 w-full rounded-xl border border-input bg-background p-4 text-sm outline-none focus:border-primary font-mono text-xs"
         />
         <div className="mt-1 text-right text-xs text-muted-foreground tabular-nums">
           {content.length} chars
@@ -142,10 +209,16 @@ export function ChaptersManager() {
       <div className="mt-3 flex flex-wrap items-center gap-3">
         <button
           type="button"
+          disabled={isSaving}
           onClick={handleSave}
-          className="inline-flex h-11 items-center gap-2 rounded-full bg-secondary px-5 text-sm font-semibold text-secondary-foreground shadow-soft transition hover:opacity-95"
+          className="inline-flex h-11 items-center gap-2 rounded-full bg-secondary px-5 text-sm font-semibold text-secondary-foreground shadow-soft transition hover:opacity-95 disabled:opacity-50"
         >
-          <Save className="h-4 w-4" aria-hidden="true" /> Save Chapter
+          {isSaving ? (
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+          ) : (
+            <Save className="h-4 w-4" aria-hidden="true" />
+          )}
+          {isSaving ? 'Saving to Database...' : 'Save Chapter'}
         </button>
       </div>
 
