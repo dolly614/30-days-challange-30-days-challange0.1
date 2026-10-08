@@ -810,7 +810,7 @@ export function validateUntamperedPaymentClientPayload(
 // 6. SERVER-SIDE ORDER CREATION & DUPLICATE PREVENTION (SECTIONS 8, 9, 10, 11)
 // ============================================================================
 
-function computeRequestHash(payload: unknown): string {
+export function computeRequestHash(payload: unknown): string {
   return crypto
     .createHash('sha256')
     .update(JSON.stringify(payload))

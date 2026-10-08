@@ -124,7 +124,7 @@ export function getTopicsForClass(classNum: number): string[] {
   return MIDDLE_CLASS_TOPICS;
 }
 
-const TOPIC_MCQS_BANK: Record<string, MCQQuestion[]> = {
+export const TOPIC_MCQS_BANK: Record<string, MCQQuestion[]> = {
   'Quadratic Equations': [
     {
       id: 'qe-1',

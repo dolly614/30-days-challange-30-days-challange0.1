@@ -54,6 +54,8 @@ import {
   getAuthoritativeAuditLogs,
   getAuthoritativeVerificationSubmissions,
 } from '@/lib/admin-verification-authoritative-service';
+import { adminCorrectAuthoritativeDailyScore } from '@/lib/daily-progress-authoritative-service';
+import { runComprehensivePaymentSecurityAudit } from '@/lib/payment-production-security-tests';
 
 const EXTRA_LEGACY_ACTIONS = new Set([
   'REQUEST_APPROVAL',
@@ -70,6 +72,8 @@ const EXTRA_LEGACY_ACTIONS = new Set([
   'ADD_EXAM_QUESTION',
   'BULK_IMPORT_EXAM_QUESTIONS',
   'DELETE_EXAM_QUESTION',
+  'RUN_PAYMENT_SECURITY_AUDIT',
+  'CORRECT_DAILY_SCORE',
 ]);
 
 export async function GET(req: NextRequest) {
@@ -602,6 +606,33 @@ export async function POST(req: NextRequest) {
         );
       }
       return NextResponse.json(lb, { status: 200 });
+    }
+
+    // 15. Payment Security Audit Execution (Phase 5)
+    if (action === 'RUN_PAYMENT_SECURITY_AUDIT') {
+      const auditResult = await runComprehensivePaymentSecurityAudit();
+      return NextResponse.json({ authorized: true, ok: true, ...auditResult }, { status: 200 });
+    }
+
+    // 16. Governed Student Daily Score Correction (Phase 3 Section 20)
+    if (action === 'CORRECT_DAILY_SCORE') {
+      const studentId = String(body?.studentId || target);
+      const day = Number(body?.day);
+      const newScore = Number(body?.newScore);
+      const reason = String(body?.reason || '');
+      const res = await adminCorrectAuthoritativeDailyScore({
+        adminActorId: auth.user.id,
+        adminActorRole: auth.user.role,
+        adminActorEmail: auth.user.email,
+        studentId,
+        day,
+        newScore,
+        reason,
+      });
+      if (!res.ok) {
+        return NextResponse.json({ error: res.error }, { status: res.httpStatus });
+      }
+      return NextResponse.json({ authorized: true, ...res }, { status: 200 });
     }
 
     // Record audit event

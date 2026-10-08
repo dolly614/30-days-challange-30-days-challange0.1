@@ -829,6 +829,54 @@ CREATE TRIGGER trg_immutable_audit_logs
   BEFORE UPDATE OR DELETE ON public.audit_logs
   FOR EACH ROW EXECUTE FUNCTION public.prevent_immutable_record_mutation();
 
+-- RLS POLICIES FOR AUTHORITATIVE PAYMENT ENGINE (PHASE 5)
+CREATE POLICY "Students view own payment orders"
+  ON public.payment_orders FOR SELECT
+  USING (auth.uid() = user_id OR public.get_my_role() = 'admin');
+
+CREATE POLICY "Admin or owner insert payment orders"
+  ON public.payment_orders FOR INSERT
+  WITH CHECK (auth.uid() = user_id OR public.get_my_role() = 'admin');
+
+CREATE POLICY "Only admin can update payment orders"
+  ON public.payment_orders FOR UPDATE
+  USING (public.get_my_role() = 'admin')
+  WITH CHECK (public.get_my_role() = 'admin');
+
+CREATE POLICY "Students view own entitlements"
+  ON public.entitlements FOR SELECT
+  USING (auth.uid() = user_id OR public.get_my_role() = 'admin');
+
+CREATE POLICY "Only admin can manage entitlements"
+  ON public.entitlements FOR ALL
+  USING (public.get_my_role() = 'admin')
+  WITH CHECK (public.get_my_role() = 'admin');
+
+CREATE POLICY "Students view own refunds"
+  ON public.refunds FOR SELECT
+  USING (requested_by = auth.uid() OR public.get_my_role() = 'admin');
+
+CREATE POLICY "Only admin can manage refunds"
+  ON public.refunds FOR ALL
+  USING (public.get_my_role() = 'admin')
+  WITH CHECK (public.get_my_role() = 'admin');
+
+CREATE POLICY "Only admin can view financial ledger"
+  ON public.financial_ledger FOR SELECT
+  USING (public.get_my_role() = 'admin');
+
+CREATE POLICY "Only admin can insert financial ledger"
+  ON public.financial_ledger FOR INSERT
+  WITH CHECK (public.get_my_role() = 'admin');
+
+CREATE POLICY "Only admin can view payment webhook events"
+  ON public.payment_webhook_events FOR SELECT
+  USING (public.get_my_role() = 'admin');
+
+CREATE POLICY "Actors view own idempotency keys"
+  ON public.api_idempotency_keys FOR SELECT
+  USING (auth.uid()::text = actor_id OR public.get_my_role() = 'admin');
+
 -- ============================================================================
 -- 16C. CANONICAL ADMIN PERMISSIONS & FOUR-EYES APPROVAL REQUESTS (SECTIONS 7, 16, 17, 42, 43)
 -- ============================================================================

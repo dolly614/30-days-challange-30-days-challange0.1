@@ -1773,6 +1773,17 @@ export function getAuthenticatedUser(
 }
 
 /**
+ * Extracts and returns the authenticated UserProfile from the request session, or null if unauthenticated.
+ */
+export function getSessionUserFromRequest(
+  req: NextRequest,
+  options?: { nowMs?: number; touchActivity?: boolean }
+): UserProfile | null {
+  const auth = getAuthenticatedUser(req, options);
+  return auth ? auth.user : null;
+}
+
+/**
  * Validates a session directly against Supabase PostgreSQL.
  * Used for authoritative boundaries, sensitive admin APIs, and multi-instance zero-trust guards.
  */

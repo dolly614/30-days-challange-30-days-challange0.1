@@ -37,12 +37,15 @@ export async function GET(req: NextRequest) {
   }
 
   // 2. If student is authenticated, get their self-rank
-  let selfRank = null;
+  let selfRankNumber: number | null = null;
   if (user) {
-    selfRank = getAuthenticatedStudentSelfRank({
-      studentId: user.id,
-      nowMs: Date.now(),
+    const rankResult = getAuthenticatedStudentSelfRank({
+      actorId: user.id,
+      actorRole: user.role,
     });
+    if (rankResult.ok) {
+      selfRankNumber = rankResult.rank;
+    }
   }
 
   return NextResponse.json(
@@ -51,7 +54,7 @@ export async function GET(req: NextRequest) {
       entries: result.entries,
       totalMatching: result.totalMatching,
       nextCursor: result.nextCursor,
-      selfRank: selfRank?.selfRank || null,
+      selfRank: selfRankNumber,
       rankingPolicyVersion: result.rankingPolicyVersion,
     },
     {

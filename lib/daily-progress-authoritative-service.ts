@@ -82,7 +82,7 @@ export type QuizSubmissionResult =
       ok: false;
       status: 'ALREADY_COMPLETED';
       error: string;
-      errorCode: 'ALREADY_COMPLETED';
+      errorCode: 'ALREADY_COMPLETED' | 'CONCURRENT_REQUEST';
       httpStatus: 409;
       day: number;
       originalScore: number;
@@ -421,9 +421,9 @@ export async function submitAuthoritativeDailyQuiz(params: {
   // 4. Idempotency Check
   const effectiveIdemKey = idempotencyKey || (attemptId ? `daily_${attemptId}` : undefined);
   if (effectiveIdemKey) {
-    const cached = await checkIdempotency(userId, 'SUBMIT_DAILY_QUIZ', effectiveIdemKey, params);
-    if (cached.hit && cached.responseBody) {
-      return cached.responseBody as QuizSubmissionResult;
+    const cached = await checkIdempotency(userId, 'SUBMIT_DAILY_QUIZ', effectiveIdemKey);
+    if (cached.isReplay && cached.responsePayload) {
+      return cached.responsePayload as QuizSubmissionResult;
     }
   }
 
@@ -571,12 +571,17 @@ export async function submitAuthoritativeDailyQuiz(params: {
     const updatedProgress = await getAuthoritativeStudentProgress(userId);
 
     // 10. Audit Log
-    await dbRecordAuditLog(userId, 'DAILY_QUIZ_COMPLETED', `Day ${day} - Score: ${calculatedScore}/5`, {
-      day,
-      calculatedScore,
-      userClass,
-      requestId,
-      attemptUuid,
+    await dbRecordAuditLog({
+      actor_id: userId,
+      action: 'DAILY_QUIZ_COMPLETED',
+      target: `Day ${day} - Score: ${calculatedScore}/5`,
+      meta: {
+        day,
+        calculatedScore,
+        userClass,
+        requestId,
+        attemptUuid,
+      },
     });
 
     const successResponse: QuizSubmissionResult = {
@@ -692,19 +697,19 @@ export async function adminCorrectAuthoritativeDailyScore(params: {
     existing.score = newScore;
   }
 
-  await dbRecordAuditLog(
-    params.adminActorId,
-    'ADMIN_DAILY_SCORE_CORRECTED',
-    `Student ${studentId} Day ${day} Score Changed ${oldScore} -> ${newScore}`,
-    {
+  await dbRecordAuditLog({
+    actor_id: params.adminActorId,
+    action: 'ADMIN_DAILY_SCORE_CORRECTED',
+    target: `Student ${studentId} Day ${day} Score Changed ${oldScore} -> ${newScore}`,
+    meta: {
       studentId,
       day,
       oldScore,
       newScore,
       reason,
       adminEmail: adminActorEmail,
-    }
-  );
+    },
+  });
 
   return {
     ok: true,

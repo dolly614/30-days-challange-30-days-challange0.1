@@ -557,15 +557,20 @@ export function buildCanonicalWhatsAppShareUrl(completedDaysCount: number): stri
 }
 
 export function buildCanonicalCertificatePublicVerificationUrl(
-  publicCertificateCode: string
+  publicCertificateCode: string,
+  verificationToken?: string
 ): string {
   const cleanCode = (publicCertificateCode || '')
     .trim()
     .replace(/[^a-zA-Z0-9_-]/g, '')
     .slice(0, 48);
-  return `${PUBLIC_CANONICAL_ORIGIN}/api/certificate?verify=${encodeURIComponent(
+  const base = `${PUBLIC_CANONICAL_ORIGIN}/api/certificate?verify=${encodeURIComponent(
     cleanCode
   )}`;
+  if (verificationToken) {
+    return `${base}&token=${encodeURIComponent(verificationToken)}`;
+  }
+  return base;
 }
 
 // ============================================================================

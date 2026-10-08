@@ -82,6 +82,19 @@ export async function verifyServerPaymentEntitlement(
 
   if (supabase && UUID_REGEX.test(userId)) {
     try {
+      const productId = examType === 'final' ? 'exam_final' : 'exam_mid';
+      const { data: ent } = await supabase
+        .from('entitlements')
+        .select('id, status, source_payment_id')
+        .eq('user_id', userId)
+        .eq('product_id', productId)
+        .eq('status', 'ACTIVE')
+        .maybeSingle();
+
+      if (ent) {
+        return { isEntitled: true, paymentId: ent.source_payment_id };
+      }
+
       const { data, error } = await supabase
         .from('payments')
         .select('id, status, amount, type, created_at')
@@ -103,7 +116,7 @@ export async function verifyServerPaymentEntitlement(
   // Check payment-financial-governance fallback
   const fallback = checkAuthoritativeExamEntitlement({ userId, examType });
   if (fallback.hasActiveEntitlement) {
-    return { isEntitled: true, paymentId: fallback.entitlement?.payment_id };
+    return { isEntitled: true, paymentId: fallback.entitlement?.source_payment_id };
   }
 
   return {
@@ -392,10 +405,15 @@ export async function authoritativeStartExamAttempt(params: {
     }
   }
 
-  await dbRecordAuditLog(userId, 'EXAM_ATTEMPT_STARTED', `${examType.toUpperCase()} Attempt ${attemptId}`, {
-    attemptId,
-    examType,
-    deadlineAtIso,
+  await dbRecordAuditLog({
+    actor_id: userId,
+    action: 'EXAM_ATTEMPT_STARTED',
+    target: `${examType.toUpperCase()} Attempt ${attemptId}`,
+    meta: {
+      attemptId,
+      examType,
+      deadlineAtIso,
+    },
   });
 
   return {
@@ -558,11 +576,16 @@ export async function authoritativeRecordExamViolation(params: {
   const remainingWarnings = Math.max(0, MAX_ALLOWED_VIOLATIONS - current.count);
   const autoSubmitted = current.count >= MAX_ALLOWED_VIOLATIONS;
 
-  await dbRecordAuditLog(userId, 'EXAM_PROCTOR_VIOLATION', `Attempt ${attemptId}: ${eventType}`, {
-    attemptId,
-    eventType,
-    violationCount: current.count,
-    remainingWarnings,
+  await dbRecordAuditLog({
+    actor_id: userId,
+    action: 'EXAM_PROCTOR_VIOLATION',
+    target: `Attempt ${attemptId}: ${eventType}`,
+    meta: {
+      attemptId,
+      eventType,
+      violationCount: current.count,
+      remainingWarnings,
+    },
   });
 
   return {
@@ -945,7 +968,7 @@ export async function authoritativeFinalizeAndScoreExam(params: {
   // 8. Commit Idempotency Key in PostgreSQL
   if (supabase) {
     try {
-      const expiresAt = new Date(nowMs + 7 * 24 * 60 * 60 * 1000).toISOString();
+      const expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
       await supabase.from('exam_idempotency_keys').upsert({
         key: effectiveIdemKey,
         user_id: userId,

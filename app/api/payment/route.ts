@@ -10,15 +10,17 @@ import {
   evaluateAuthoritativePaymentContract,
 } from '@/lib/api-contract-governance';
 import {
-  checkAuthoritativeExamEntitlement,
-  createAuthoritativePaymentOrder,
-  executeAuthoritativePaymentRefund,
+  checkAuthoritativeExamEntitlementDb,
+  createAuthoritativePaymentOrderDb,
+  executeAuthoritativePaymentRefundDb,
+  getAuthorizedPaymentOrderStatusAndReceiptDb,
+  processAuthoritativePaymentWebhookDb,
+  verifyAndCaptureAuthoritativePaymentDb,
+} from '@/lib/payment-database-authoritative-service';
+import {
   generateRazorpayPaymentSignature,
-  getAuthorizedPaymentOrderStatusAndReceipt,
-  processAuthoritativePaymentWebhook,
   reconcilePaymentAndFinancialState,
   resolvePaymentProviderSecrets,
-  verifyAndCaptureAuthoritativePayment,
 } from '@/lib/payment-financial-governance';
 
 export async function GET(req: NextRequest) {
@@ -41,7 +43,7 @@ export async function GET(req: NextRequest) {
   const examTypeParam = req.nextUrl.searchParams.get('examType');
 
   if (orderId || paymentId) {
-    const statusRes = getAuthorizedPaymentOrderStatusAndReceipt({
+    const statusRes = await getAuthorizedPaymentOrderStatusAndReceiptDb({
       actorId: authGuard.user.id,
       actorRole: authGuard.user.role,
       orderId,
@@ -60,7 +62,7 @@ export async function GET(req: NextRequest) {
   }
 
   const examType = examTypeParam === 'final' ? 'final' : 'mid';
-  const entitlementCheck = checkAuthoritativeExamEntitlement({
+  const entitlementCheck = await checkAuthoritativeExamEntitlementDb({
     userId: authGuard.user.id,
     examType,
   });
@@ -81,9 +83,9 @@ export async function POST(req: NextRequest) {
     const rawText = await req.text();
     const webhookSig = req.headers.get('x-razorpay-signature');
 
-    // 1. Authoritative Webhook Endpoint Processing (Section 14, 15, 16)
+    // 1. Authoritative Webhook Endpoint Processing (Section 8, 9, 10, 14, 15)
     if (webhookSig) {
-      const whRes = processAuthoritativePaymentWebhook({
+      const whRes = await processAuthoritativePaymentWebhookDb({
         rawBody: rawText,
         signatureHeader: webhookSig,
         requestId: req.headers.get('x-request-id') || undefined,
@@ -126,9 +128,9 @@ export async function POST(req: NextRequest) {
       req.headers.get('idempotency-key') ||
       (typeof body?.idempotencyKey === 'string' ? body.idempotencyKey : null);
 
-    // 2. Server-Side Payment Verification (Section 12 & 13)
+    // 2. Server-Side Payment Verification (Section 6, 7, 10, 12, 13)
     if (action === 'VERIFY_PAYMENT') {
-      const verified = verifyAndCaptureAuthoritativePayment({
+      const verified = await verifyAndCaptureAuthoritativePaymentDb({
         actorId: authGuard.user.id,
         actorRole: authGuard.user.role,
         providerOrderId: String(body?.providerOrderId || body?.orderId || ''),
@@ -149,7 +151,7 @@ export async function POST(req: NextRequest) {
         requestId: req.headers.get('x-request-id') || undefined,
       });
 
-      if (!verified.ok) {
+      if (!verified.ok || !verified.payment || !verified.order) {
         return NextResponse.json(
           {
             success: false,
@@ -175,9 +177,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 3. Server-Authorized Admin Refund Processing (Section 20, 21, 22)
+    // 3. Server-Authorized Admin Refund Processing (Section 16, 17, 18, 19, 20, 21, 22)
     if (action === 'REFUND') {
-      const refundRes = executeAuthoritativePaymentRefund({
+      const refundRes = await executeAuthoritativePaymentRefundDb({
         actorId: authGuard.user.id,
         actorRole: authGuard.user.role,
         paymentId: String(body?.paymentId || ''),
@@ -207,7 +209,7 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 4. Server-Authorized Admin Reconciliation (Section 34)
+    // 4. Server-Authorized Admin Reconciliation (Section 36, 37)
     if (action === 'RECONCILE') {
       if (authGuard.user.role !== 'admin') {
         return NextResponse.json(
@@ -253,7 +255,7 @@ export async function POST(req: NextRequest) {
         ? body.userId.trim()
         : undefined;
 
-    const orderRes = createAuthoritativePaymentOrder({
+    const orderRes = await createAuthoritativePaymentOrderDb({
       actorId: authGuard.user.id,
       actorRole: authGuard.user.role,
       clientSuppliedUserId: clientUserId,
@@ -269,7 +271,7 @@ export async function POST(req: NextRequest) {
       requestId: req.headers.get('x-request-id') || undefined,
     });
 
-    if (!orderRes.ok) {
+    if (!orderRes.ok || !orderRes.order || !orderRes.checkoutPayload) {
       return NextResponse.json(
         {
           success: false,
@@ -280,12 +282,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // In non-production preview environments, if server-side checkout completion is requested,
-    // verify and capture through the authoritative server pipeline (impossible in PRODUCTION).
-    if (
-      process.env.NODE_ENV !== 'production' &&
-      body?.completeServerVerifiedCheckout === true
-    ) {
+    // Section 46 & 47: Development simulation checkout is strictly prohibited in PRODUCTION
+    if (body?.completeServerVerifiedCheckout === true) {
+      if (process.env.NODE_ENV === 'production') {
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'Simulated checkout is strictly forbidden in production environment.',
+            errorCode: 'CLIENT_TAMPERING_REJECTED',
+          },
+          { status: 403 }
+        );
+      }
+
       const secrets = resolvePaymentProviderSecrets({
         environment: 'DEVELOPMENT',
       });
@@ -296,7 +305,7 @@ export async function POST(req: NextRequest) {
           providerPaymentId,
           keySecret: secrets.keySecret,
         });
-        const captured = verifyAndCaptureAuthoritativePayment({
+        const captured = await verifyAndCaptureAuthoritativePaymentDb({
           actorId: authGuard.user.id,
           actorRole: authGuard.user.role,
           providerOrderId: orderRes.order.provider_order_id,
@@ -304,7 +313,7 @@ export async function POST(req: NextRequest) {
           providerSignature: sig,
           environment: 'DEVELOPMENT',
         });
-        if (captured.ok) {
+        if (captured.ok && captured.payment && captured.entitlement) {
           return NextResponse.json(
             {
               ...orderRes.checkoutPayload,
