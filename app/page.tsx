@@ -99,15 +99,15 @@ export default function HomePage() {
 
           {/* Right Interactive Streak Preview Card */}
           <div className="relative animate-fade-up">
-            <div className="relative mx-auto w-full max-w-md rounded-3xl bg-card p-6 shadow-soft">
+            <div className="card-interactive relative mx-auto w-full max-w-md rounded-3xl bg-card p-6 shadow-soft">
               <div className="flex items-center justify-between">
                 <div>
                   <div className="text-xs text-muted-foreground">Today&apos;s Streak</div>
                   <div className="mt-1 flex items-center gap-1 text-2xl font-bold tabular-nums">
-                    🔥 12 days
+                    <span className="animate-streak-fire inline-block">🔥</span> 12 days
                   </div>
                 </div>
-                <div className="rounded-full bg-secondary/10 px-3 py-1 text-xs font-semibold text-secondary">
+                <div className="rounded-full bg-secondary/10 px-3 py-1 text-xs font-semibold text-secondary animate-pulse-glow">
                   Live
                 </div>
               </div>
@@ -122,12 +122,12 @@ export default function HomePage() {
                       key={dayNum}
                       href={`/daily/${dayNum}`}
                       title={`Go to Day ${dayNum}`}
-                      className={`aspect-square rounded-md transition hover:scale-110 ${
+                      className={`aspect-square rounded-md transition-all duration-150 hover:scale-125 ${
                         isDone
                           ? 'bg-secondary'
                           : isToday
-                          ? 'bg-primary animate-pulse-glow'
-                          : 'bg-muted'
+                          ? 'bg-primary ring-2 ring-primary/50 ring-offset-1 animate-pulse-glow'
+                          : 'bg-muted hover:bg-muted-foreground/30'
                       }`}
                     />
                   );
@@ -278,39 +278,39 @@ export default function HomePage() {
           </div>
 
           <div className="mt-12 grid gap-6 md:grid-cols-3">
-            <div className="rounded-3xl bg-gradient-gold p-1 shadow-soft md:-translate-y-4">
+            <div className="card-interactive shimmer-container rounded-3xl bg-gradient-gold p-1 shadow-soft md:-translate-y-4">
               <div className="rounded-[22px] bg-card p-7 text-center">
-                <div className="text-5xl">💻</div>
+                <div className="animate-trophy-glow inline-block text-5xl">💻</div>
                 <div className="mt-3 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
                   1st Place
                 </div>
-                <div className="mt-2 text-4xl font-extrabold">Laptop</div>
+                <div className="mt-2 text-4xl font-extrabold text-foreground">Laptop</div>
                 <div className="mt-2 text-xs text-muted-foreground">
                   Plus certificate + gift
                 </div>
               </div>
             </div>
 
-            <div className="rounded-3xl bg-gradient-silver p-1 shadow-soft">
+            <div className="card-interactive rounded-3xl bg-gradient-silver p-1 shadow-soft">
               <div className="rounded-[22px] bg-card p-7 text-center">
-                <div className="text-5xl">📱</div>
+                <div className="inline-block text-5xl transition-transform duration-200 hover:scale-110">📱</div>
                 <div className="mt-3 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
                   2nd Place
                 </div>
-                <div className="mt-2 text-4xl font-extrabold">Tablet</div>
+                <div className="mt-2 text-4xl font-extrabold text-foreground">Tablet</div>
                 <div className="mt-2 text-xs text-muted-foreground">
                   Plus certificate + gift
                 </div>
               </div>
             </div>
 
-            <div className="rounded-3xl bg-gradient-bronze p-1 shadow-soft">
+            <div className="card-interactive rounded-3xl bg-gradient-bronze p-1 shadow-soft">
               <div className="rounded-[22px] bg-card p-7 text-center">
-                <div className="text-5xl">📲</div>
+                <div className="inline-block text-5xl transition-transform duration-200 hover:scale-110">📲</div>
                 <div className="mt-3 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
                   3rd Place
                 </div>
-                <div className="mt-2 text-4xl font-extrabold">Smartphone</div>
+                <div className="mt-2 text-4xl font-extrabold text-foreground">Smartphone</div>
                 <div className="mt-2 text-xs text-muted-foreground">
                   Plus certificate + gift
                 </div>
@@ -420,22 +420,26 @@ export default function HomePage() {
                       type="button"
                       aria-expanded={isOpen}
                       onClick={() => setOpenFaqIndex(isOpen ? null : idx)}
-                      className="flex flex-1 items-center justify-between py-4 text-left text-sm font-semibold transition-all hover:underline"
+                      className="flex flex-1 items-center justify-between py-4 text-left text-sm font-semibold transition-all hover:text-primary cursor-pointer"
                     >
                       {faq.q}
                       <ChevronDown
-                        className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${
-                          isOpen ? 'rotate-180' : ''
+                        className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-300 ease-out ${
+                          isOpen ? 'rotate-180 text-primary' : ''
                         }`}
                         aria-hidden="true"
                       />
                     </button>
                   </h3>
-                  {isOpen && (
-                    <div className="pb-4 text-sm text-muted-foreground leading-relaxed">
+                  <div
+                    className={`grid transition-all duration-300 ease-out ${
+                      isOpen ? 'grid-rows-[1fr] opacity-100 pb-4' : 'grid-rows-[0fr] opacity-0 pb-0'
+                    }`}
+                  >
+                    <div className="overflow-hidden text-sm text-muted-foreground leading-relaxed">
                       {faq.a}
                     </div>
-                  )}
+                  </div>
                 </div>
               );
             })}

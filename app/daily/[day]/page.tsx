@@ -207,9 +207,10 @@ export default function DailyChapterPage({
 
       try {
         confetti({
-          particleCount: 70,
-          spread: 65,
+          particleCount: 110,
+          spread: 80,
           origin: { y: 0.6 },
+          colors: ['#7c3aed', '#f97316', '#10b981', '#ec4899', '#fde047'],
         });
       } catch {
         // ignore
@@ -346,7 +347,7 @@ export default function DailyChapterPage({
             </div>
 
             {submitted && (
-              <div className="rounded-2xl bg-secondary/15 px-4 py-2 text-sm font-extrabold text-secondary tabular-nums">
+              <div className="animate-pop-in rounded-2xl bg-secondary/15 px-4 py-2 text-sm font-extrabold text-secondary tabular-nums shadow-sm">
                 Score: {displayScore} / 5
               </div>
             )}
@@ -374,13 +375,15 @@ export default function DailyChapterPage({
                       const isOptionTheCorrectAnswer = hasReview && review.correctIndex === optIdx;
 
                       let btnStyle = 'border-border bg-card hover:bg-accent/50';
+                      let extraAnim = '';
                       if (submitted && hasReview) {
                         if (isOptionTheCorrectAnswer) {
                           btnStyle =
-                            'border-secondary bg-secondary/15 text-foreground font-semibold';
+                            'border-secondary bg-secondary/15 text-foreground font-semibold ring-1 ring-secondary/50';
                         } else if (isSelected && !isOptionTheCorrectAnswer) {
                           btnStyle =
-                            'border-destructive bg-destructive/15 text-destructive font-semibold';
+                            'border-destructive bg-destructive/15 text-destructive font-semibold ring-1 ring-destructive/50';
+                          extraAnim = 'animate-shake-x';
                         }
                       } else if (isSelected) {
                         btnStyle = 'border-primary bg-primary/10 text-primary font-semibold ring-1 ring-primary';
@@ -392,16 +395,16 @@ export default function DailyChapterPage({
                           type="button"
                           disabled={submitted || isSubmitting}
                           onClick={() => handleSelectOption(qIdx, optIdx)}
-                          className={`flex items-center justify-between rounded-xl border px-4 py-3 text-left text-xs transition ${btnStyle}`}
+                          className={`flex items-center justify-between rounded-xl border px-4 py-3 text-left text-xs transition duration-150 active:scale-[0.98] ${btnStyle} ${extraAnim}`}
                         >
                           <span>
                             <b className="mr-1.5">{String.fromCharCode(65 + optIdx)}.</b> {opt}
                           </span>
                           {submitted && hasReview && isOptionTheCorrectAnswer && (
-                            <CheckCircle2 className="h-4 w-4 shrink-0 text-secondary" />
+                            <CheckCircle2 className="animate-pop-in h-4 w-4 shrink-0 text-secondary" />
                           )}
                           {submitted && hasReview && isSelected && !isOptionTheCorrectAnswer && (
-                            <XCircle className="h-4 w-4 shrink-0 text-destructive" />
+                            <XCircle className="animate-pop-in h-4 w-4 shrink-0 text-destructive" />
                           )}
                         </button>
                       );

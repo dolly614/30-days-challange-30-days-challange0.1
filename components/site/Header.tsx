@@ -77,7 +77,7 @@ export function Header() {
         <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6">
           <Link
             href="/"
-            className="flex items-center gap-2 font-bold whitespace-nowrap shrink-0"
+            className="group flex items-center gap-2 font-bold whitespace-nowrap shrink-0 transition-transform duration-200 hover:scale-105 hover:rotate-[2deg]"
           >
             <BrandMark size={36} />
             <span className="text-base sm:text-lg leading-tight">
@@ -96,13 +96,20 @@ export function Header() {
                   key={item.href}
                   href={item.href}
                   aria-current={isActive ? 'page' : undefined}
-                  className={`transition-colors whitespace-nowrap ${
+                  className={`group relative py-1 transition-colors whitespace-nowrap ${
                     isActive
-                      ? 'text-foreground font-semibold underline decoration-primary decoration-2 underline-offset-8'
+                      ? 'text-foreground font-semibold'
                       : 'text-muted-foreground hover:text-foreground'
                   }`}
                 >
                   {item.label}
+                  <span
+                    className={`absolute bottom-0 left-0 h-0.5 rounded-full bg-primary transition-all duration-300 ${
+                      isActive
+                        ? 'w-full'
+                        : 'w-0 group-hover:w-full opacity-60 group-hover:opacity-100'
+                    }`}
+                  />
                 </Link>
               );
             })}
@@ -116,9 +123,9 @@ export function Header() {
               type="button"
               onClick={toggleDarkMode}
               aria-label="Toggle dark mode"
-              className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition hover:bg-accent hover:text-foreground"
+              className="btn-interactive inline-flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition duration-200 active:rotate-45 hover:bg-accent hover:text-foreground"
             >
-              {darkMode ? <Sun className="h-4 w-4 text-saffron" /> : <Moon className="h-4 w-4" />}
+              {darkMode ? <Sun className="h-4 w-4 text-saffron transition-transform duration-300" /> : <Moon className="h-4 w-4 transition-transform duration-300" />}
             </button>
 
             {/* Notifications Bell */}
@@ -127,7 +134,9 @@ export function Header() {
                 type="button"
                 onClick={() => setShowNotifs((prev) => !prev)}
                 aria-label="Notifications"
-                className="relative inline-flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition hover:bg-accent hover:text-foreground"
+                className={`btn-interactive relative inline-flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background text-muted-foreground transition hover:bg-accent hover:text-foreground ${
+                  unreadCount > 0 ? 'animate-pulse-glow' : ''
+                }`}
               >
                 <Bell className="h-4 w-4" />
                 {unreadCount > 0 && (
@@ -136,7 +145,7 @@ export function Header() {
               </button>
 
               {showNotifs && (
-                <div className="absolute right-0 mt-2 w-80 rounded-3xl border border-border bg-card p-4 shadow-soft z-50">
+                <div className="animate-pop-in absolute right-0 mt-2 w-80 rounded-3xl border border-border bg-card p-4 shadow-soft z-50">
                   <div className="flex items-center justify-between border-b border-border pb-2.5">
                     <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
                       Notifications ({unreadCount} unread)
@@ -219,14 +228,14 @@ export function Header() {
 
         {/* Mobile Navigation Drawer */}
         {mobileMenuOpen && (
-          <div className="border-t border-border bg-card px-4 py-4 md:hidden">
+          <div className="animate-fade-up border-t border-border bg-card px-4 py-4 md:hidden">
             <nav className="flex flex-col space-y-2 text-sm font-medium">
               {navItems.map((item) => (
                 <Link
                   key={item.href}
                   href={item.href}
                   onClick={() => setMobileMenuOpen(false)}
-                  className={`rounded-xl px-3 py-2 ${
+                  className={`rounded-xl px-3 py-2 transition ${
                     pathname === item.href
                       ? 'bg-accent font-semibold text-primary'
                       : 'text-muted-foreground hover:bg-muted'
@@ -256,8 +265,8 @@ export function Header() {
 
       {/* Logout Confirmation Modal */}
       {showLogoutConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
-          <div className="w-full max-w-sm rounded-3xl border border-border bg-card p-6 shadow-soft">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-md animate-fade-up">
+          <div className="animate-pop-in w-full max-w-sm rounded-3xl border border-border bg-card p-6 shadow-soft">
             <h3 className="text-lg font-bold">Logout Confirm Karein?</h3>
             <p className="mt-1.5 text-sm text-muted-foreground">
               Kya aap sach mein apne Uyanix 30 Days Challenge account se logout karna chahte hain? Aapka progress safe rahega.
@@ -266,14 +275,14 @@ export function Header() {
               <button
                 type="button"
                 onClick={() => setShowLogoutConfirm(false)}
-                className="h-10 rounded-full border border-border px-4 text-xs font-semibold hover:bg-accent"
+                className="btn-interactive h-10 rounded-full border border-border px-4 text-xs font-semibold hover:bg-accent"
               >
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={handleConfirmLogout}
-                className="h-10 rounded-full bg-destructive px-5 text-xs font-semibold text-destructive-foreground shadow-soft hover:opacity-90"
+                className="btn-interactive h-10 rounded-full bg-destructive px-5 text-xs font-semibold text-destructive-foreground shadow-soft hover:opacity-90"
               >
                 Yes, Logout
               </button>

@@ -38,6 +38,7 @@ import {
 } from './supabase-server';
 
 export type UserRole = 'student' | 'teacher' | 'admin';
+export type { UserProfile };
 
 export const SESSION_COOKIE_NAME = 'uyanix_session';
 export const OTP_BINDING_COOKIE_NAME = 'uyanix_otp_binding';

@@ -1,10 +1,13 @@
-import { defineConfig } from "eslint/config";
-import next from "eslint-config-next";
+import nextPlugin from "@next/eslint-plugin-next";
 
-export default defineConfig([
+export default [
   {
-    extends: [...next],
+    plugins: {
+      "@next/next": nextPlugin,
+    },
     rules: {
+      ...nextPlugin.configs.recommended.rules,
+      ...nextPlugin.configs["core-web-vitals"].rules,
       'no-restricted-imports': ['error', {
         paths: [{
           name: '@/lib/supabase-admin',
@@ -14,4 +17,4 @@ export default defineConfig([
       'no-console': ['warn', { allow: ['warn', 'error'] }],
     },
   },
-]);
+];

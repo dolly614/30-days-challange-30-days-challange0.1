@@ -215,7 +215,28 @@ function ExamPortalContent() {
       setStage('result');
 
       try {
-        confetti({ particleCount: 90, spread: 70, origin: { y: 0.6 } });
+        confetti({
+          particleCount: 120,
+          spread: 80,
+          origin: { y: 0.6 },
+          colors: ['#f97316', '#7c3aed', '#10b981', '#f59e0b', '#ec4899'],
+        });
+        setTimeout(() => {
+          confetti({
+            particleCount: 60,
+            angle: 60,
+            spread: 55,
+            origin: { x: 0 },
+            colors: ['#f97316', '#7c3aed', '#10b981', '#f59e0b', '#ec4899'],
+          });
+          confetti({
+            particleCount: 60,
+            angle: 120,
+            spread: 55,
+            origin: { x: 1 },
+            colors: ['#f97316', '#7c3aed', '#10b981', '#f59e0b', '#ec4899'],
+          });
+        }, 250);
       } catch {
         // ignore
       }
@@ -459,13 +480,13 @@ function ExamPortalContent() {
               )}
 
               <div
-                className={`flex items-center gap-2 rounded-full px-4 py-2 font-mono text-base font-bold tabular-nums shadow-soft ${
+                className={`flex items-center gap-2 rounded-full px-4 py-2 font-mono text-base font-bold tabular-nums shadow-soft transition-all duration-300 ${
                   secondsLeft <= 300
-                    ? 'bg-destructive text-destructive-foreground animate-pulse'
+                    ? 'bg-destructive text-destructive-foreground animate-pulse-glow ring-2 ring-destructive shadow-[0_0_15px_rgba(239,68,68,0.6)]'
                     : 'bg-primary text-primary-foreground'
                 }`}
               >
-                <Clock className="h-4 w-4" />
+                <Clock className={`h-4 w-4 ${secondsLeft <= 300 ? 'animate-bounce' : ''}`} />
                 <span>
                   {mins}:{secs}
                 </span>
@@ -606,7 +627,7 @@ function ExamPortalContent() {
                       key={q.id}
                       type="button"
                       onClick={() => setCurrentIdx(idx)}
-                      className={`flex aspect-square items-center justify-center rounded-xl text-xs transition hover:scale-105 ${style}`}
+                      className={`flex aspect-square items-center justify-center rounded-xl text-xs transition-all duration-150 hover:scale-115 active:scale-90 ${style}`}
                     >
                       {idx + 1}
                     </button>
@@ -632,14 +653,14 @@ function ExamPortalContent() {
 
       {/* STAGE 4: RESULT SUMMARY & CERTIFICATE */}
       {stage === 'result' && (
-        <div className="mx-auto max-w-3xl space-y-8">
+        <div className="mx-auto max-w-3xl space-y-8 animate-fade-up">
           <div className="rounded-3xl bg-gradient-hero p-8 text-center text-primary-foreground shadow-soft sm:p-10">
-            <Trophy className="mx-auto h-14 w-14 text-saffron animate-bounce" />
-            <span className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-white/20 px-3 py-1 text-xs font-semibold">
+            <Trophy className="mx-auto h-16 w-16 text-saffron animate-trophy-glow" />
+            <span className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-white/20 px-3 py-1 text-xs font-semibold animate-pop-in">
               <CheckCircle2 className="h-3.5 w-3.5" /> Official Exam Evaluated &amp; Certified
             </span>
 
-            <h1 className="mt-3 text-3xl font-extrabold sm:text-4xl">
+            <h1 className="mt-3 text-3xl font-extrabold sm:text-4xl animate-pop-in">
               Congratulations, {currentUser?.name || 'dollysingh'}! 🎉
             </h1>
             <p className="mt-2 text-sm opacity-90">
@@ -647,25 +668,25 @@ function ExamPortalContent() {
             </p>
 
             <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <div className="rounded-2xl bg-card p-4 text-foreground shadow-card">
+              <div className="card-interactive animate-pop-in rounded-2xl bg-card p-4 text-foreground shadow-card">
                 <div className="text-xs text-muted-foreground">Marks Scored</div>
                 <div className="mt-1 text-2xl font-extrabold text-primary tabular-nums">
                   {scaledTotalScore} / 150
                 </div>
               </div>
-              <div className="rounded-2xl bg-card p-4 text-foreground shadow-card">
+              <div className="card-interactive animate-pop-in rounded-2xl bg-card p-4 text-foreground shadow-card">
                 <div className="text-xs text-muted-foreground">Correct MCQs</div>
                 <div className="mt-1 text-2xl font-extrabold text-secondary tabular-nums">
                   {correctCount}
                 </div>
               </div>
-              <div className="rounded-2xl bg-card p-4 text-foreground shadow-card">
+              <div className="card-interactive animate-pop-in rounded-2xl bg-card p-4 text-foreground shadow-card">
                 <div className="text-xs text-muted-foreground">Percentage</div>
                 <div className="mt-1 text-2xl font-extrabold text-foreground tabular-nums">
                   {serverPercentage ?? Math.round((scaledTotalScore / 150) * 100)}%
                 </div>
               </div>
-              <div className="rounded-2xl bg-card p-4 text-foreground shadow-card">
+              <div className="card-interactive animate-pop-in rounded-2xl bg-card p-4 text-foreground shadow-card">
                 <div className="text-xs text-muted-foreground">All-India Rank</div>
                 <div className="mt-1 text-2xl font-extrabold text-saffron tabular-nums">
                   #{serverRank ?? 1}

@@ -52,9 +52,12 @@ export function Countdown() {
       {units.map((u) => (
         <div
           key={u.label}
-          className="flex w-16 flex-col items-center rounded-2xl bg-card px-2 py-3 shadow-card sm:w-20"
+          className="card-interactive flex w-16 flex-col items-center rounded-2xl bg-card px-2 py-3 shadow-card sm:w-20"
         >
-          <span className="text-2xl font-bold tabular-nums text-primary sm:text-3xl">
+          <span
+            key={`${u.label}-${u.value}`}
+            className="animate-pop-in inline-block text-2xl font-bold tabular-nums text-primary sm:text-3xl"
+          >
             {u.value}
           </span>
           <span className="text-[10px] uppercase tracking-wider text-muted-foreground sm:text-xs">

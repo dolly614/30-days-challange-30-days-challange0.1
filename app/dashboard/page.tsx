@@ -99,15 +99,15 @@ export default function DashboardPage() {
               {currentUser?.streakReminders ? 'Reminders Active' : 'Enable Reminders'}
             </button>
 
-            <div className="flex items-center gap-2 rounded-full bg-gradient-to-r from-saffron/20 to-india-green/20 px-4 py-2 text-sm font-semibold tabular-nums">
-              <Flame className="h-4 w-4 text-saffron" aria-hidden="true" /> {completedCount} day streak!
+            <div className="flex items-center gap-2 rounded-full bg-gradient-to-r from-saffron/20 to-india-green/20 px-4 py-2 text-sm font-semibold tabular-nums card-interactive">
+              <Flame className="h-4 w-4 text-saffron animate-streak-fire" aria-hidden="true" /> {completedCount} day streak!
             </div>
           </div>
         </div>
 
         {/* 3 KPI Stat Cards */}
         <div className="mt-6 grid gap-4 md:grid-cols-3">
-          <div className="rounded-3xl border border-border bg-card p-5 shadow-card">
+          <div className="card-interactive rounded-3xl border border-border bg-card p-5 shadow-card">
             <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               <span className="h-2 w-2 rounded-full bg-secondary" /> Days Completed
             </div>
@@ -116,7 +116,7 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <div className="rounded-3xl border border-border bg-card p-5 shadow-card">
+          <div className="card-interactive rounded-3xl border border-border bg-card p-5 shadow-card">
             <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               <span className="h-2 w-2 rounded-full bg-primary" /> Progress
             </div>
@@ -125,7 +125,7 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <div className="rounded-3xl border border-border bg-card p-5 shadow-card">
+          <div className="card-interactive rounded-3xl border border-border bg-card p-5 shadow-card">
             <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               <span className="h-2 w-2 rounded-full bg-saffron" /> Current Rank
             </div>
@@ -133,17 +133,19 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Progress Bar */}
-        <div className="mt-3 h-3 w-full overflow-hidden rounded-full bg-muted">
+        {/* Progress Bar with glossy continuous shimmer sweep */}
+        <div className="shimmer-container relative mt-3 h-3.5 w-full overflow-hidden rounded-full bg-muted">
           <div
-            className="h-full bg-gradient-hero transition-all"
+            className="relative h-full overflow-hidden rounded-full bg-gradient-hero transition-all duration-500 ease-out"
             style={{ width: `${progressPercent}%` }}
-          />
+          >
+            <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/35 to-transparent animate-[shimmerSweep_2s_infinite]" />
+          </div>
         </div>
 
         {/* Tracker + Sidebar */}
         <div className="mt-10 grid gap-6 lg:grid-cols-3">
-          <div className="rounded-3xl border border-border bg-card p-6 shadow-card lg:col-span-2">
+          <div className="card-interactive rounded-3xl border border-border bg-card p-6 shadow-card lg:col-span-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <h2 className="text-xl font-bold">30-Day Challenge Tracker</h2>
@@ -174,17 +176,17 @@ export default function DashboardPage() {
                     key={day}
                     title={`Day ${day}: ${title}`}
                     href={`/daily/${day}`}
-                    className={`relative flex aspect-square flex-col items-center justify-center rounded-xl text-xs font-semibold transition hover:scale-105 ${
+                    className={`relative flex aspect-square flex-col items-center justify-center rounded-xl text-xs font-semibold transition-all duration-150 hover:scale-110 active:scale-95 ${
                       isDone
-                        ? 'bg-secondary text-secondary-foreground'
+                        ? 'bg-secondary text-secondary-foreground shadow-sm'
                         : isToday
-                        ? 'bg-primary text-primary-foreground ring-2 ring-primary/40'
-                        : 'bg-muted text-muted-foreground'
+                        ? 'bg-primary text-primary-foreground ring-2 ring-primary/40 animate-pulse-glow'
+                        : 'bg-muted text-muted-foreground hover:bg-muted-foreground/20'
                     }`}
                   >
                     {isDone && (
                       <CircleCheck
-                        className="absolute right-1 top-1 h-3 w-3"
+                        className="animate-pop-in absolute right-1 top-1 h-3 w-3"
                         aria-hidden="true"
                       />
                     )}
@@ -210,7 +212,7 @@ export default function DashboardPage() {
 
           {/* Right Action Cards */}
           <div className="space-y-6">
-            <div className="rounded-3xl border border-border bg-gradient-hero p-6 text-primary-foreground shadow-soft">
+            <div className="card-interactive animate-aura rounded-3xl border border-border bg-gradient-hero p-6 text-primary-foreground shadow-soft">
               <div className="text-xs font-semibold uppercase tracking-widest opacity-80">
                 Aaj ka task
               </div>

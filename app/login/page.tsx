@@ -32,7 +32,13 @@ export default function LoginPage() {
       if (res?.user && res?.serverUser) {
         login(res.serverUser);
         toast.success('Signed in with Google Workspace & Sheets access! 🚀');
-        router.push(res.serverUser.role === 'admin' ? '/admin' : '/dashboard');
+        const dest =
+          res.serverUser.role === 'admin'
+            ? '/admin'
+            : res.serverUser.role === 'teacher'
+            ? '/teacher'
+            : '/dashboard';
+        router.push(dest);
         router.refresh();
       }
     } catch (err: unknown) {
@@ -62,7 +68,12 @@ export default function LoginPage() {
       setPassword('');
       toast.success('Welcome back to Uyanix 30 Days Challenge! 🚀');
       const params = new URLSearchParams(window.location.search);
-      const defaultDest = authoritativeUser?.role === 'admin' ? '/admin' : '/dashboard';
+      const defaultDest =
+        authoritativeUser?.role === 'admin'
+          ? '/admin'
+          : authoritativeUser?.role === 'teacher'
+          ? '/teacher'
+          : '/dashboard';
       const rawRedirect = params.get('redirect') || defaultDest;
       const redirectValidation = validateSafeInternalRedirect(
         rawRedirect,
@@ -127,7 +138,12 @@ export default function LoginPage() {
       login(authoritativeUser);
       setOtpCode('');
       toast.success('Mobile OTP Verified! Redirecting...');
-      const defaultDest = authoritativeUser?.role === 'admin' ? '/admin' : '/dashboard';
+      const defaultDest =
+        authoritativeUser?.role === 'admin'
+          ? '/admin'
+          : authoritativeUser?.role === 'teacher'
+          ? '/teacher'
+          : '/dashboard';
       router.push(defaultDest as any);
       router.refresh();
     } catch {
@@ -163,14 +179,26 @@ export default function LoginPage() {
         body: JSON.stringify({ role: requestedRole }),
       });
       const data = await res.json();
-      if (!res.ok) {
+      if (!res.ok || !data.user) {
         toast.error(
           data.error ||
-            'Quick Demo login is disabled. Please sign in with your registered credentials or Google account.'
+            'Quick Demo login is currently unavailable. Please sign in with registered credentials.'
         );
+        return;
       }
+      const authoritativeUser = (await syncServerSession()) || data.user;
+      login(authoritativeUser);
+      toast.success(`Welcome in Demo Mode as ${authoritativeUser.name}! 🚀`);
+      const dest =
+        authoritativeUser.role === 'admin'
+          ? '/admin'
+          : authoritativeUser.role === 'teacher'
+          ? '/teacher'
+          : '/dashboard';
+      router.push(dest as any);
+      router.refresh();
     } catch {
-      toast.error('Demo login is disabled.');
+      toast.error('Demo login failed. Please try again.');
     }
   };
 

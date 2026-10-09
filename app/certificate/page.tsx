@@ -10,11 +10,25 @@ import { BrandMark } from '@/components/site/BrandMark';
 import { useUyanixStore } from '@/lib/store';
 import { buildCanonicalCertificatePublicVerificationUrl } from '@/lib/seo-canonical-url-governance';
 import { toast } from 'sonner';
+import confetti from 'canvas-confetti';
 
 export default function CertificatePage() {
   const router = useRouter();
   const { currentUser, completedDays, examAttempts, syncServerSession } = useUyanixStore();
   const [customName, setCustomName] = useState(currentUser?.name || 'dollysingh');
+
+  useEffect(() => {
+    try {
+      confetti({
+        particleCount: 85,
+        spread: 75,
+        origin: { y: 0.5 },
+        colors: ['#f59e0b', '#fde047', '#7c3aed', '#10b981'],
+      });
+    } catch {
+      // ignore
+    }
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -125,8 +139,10 @@ export default function CertificatePage() {
         </div>
 
         {/* Printable Certificate Frame */}
-        <div className="mt-6 rounded-3xl bg-gradient-gold p-1.5 shadow-soft">
+        <div className="card-interactive shimmer-container relative mt-6 rounded-3xl bg-gradient-gold p-1.5 shadow-[0_0_30px_rgba(245,158,11,0.35)] transition-shadow duration-300 hover:shadow-[0_0_45px_rgba(245,158,11,0.6)]">
           <div className="relative overflow-hidden rounded-[20px] border border-amber-300/60 bg-card p-8 text-center sm:p-12">
+            {/* Shimmer reflection highlight */}
+            <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-transparent via-amber-200/20 to-transparent animate-[shimmerSweep_3s_infinite]" />
             <div className="mx-auto flex items-center justify-center gap-2.5">
               <BrandMark size={44} />
               <div className="text-left">
