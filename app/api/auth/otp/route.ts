@@ -311,6 +311,7 @@ export async function POST(req: NextRequest) {
       authenticated: true,
       phoneVerified: true,
       user: verifyResult.user,
+      token: sessionToken,
     });
     clearOtpBindingCookie(res);
     setSessionCookie(res, sessionToken);

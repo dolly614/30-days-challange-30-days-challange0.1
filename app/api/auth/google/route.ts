@@ -135,6 +135,7 @@ export async function POST(req: NextRequest) {
     const res = NextResponse.json({
       authenticated: true,
       user: userProfile,
+      token: sessionToken,
     });
     setSessionCookie(res, sessionToken);
     return res;

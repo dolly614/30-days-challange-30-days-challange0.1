@@ -64,7 +64,7 @@ export default function LoginPage() {
         return;
       }
       const authoritativeUser = (await syncServerSession()) || data.user;
-      login(authoritativeUser);
+      login(authoritativeUser, data.token);
       setPassword('');
       toast.success('Welcome back to Uyanix 30 Days Challenge! 🚀');
       const params = new URLSearchParams(window.location.search);
@@ -135,7 +135,7 @@ export default function LoginPage() {
       }
 
       const authoritativeUser = (await syncServerSession()) || verifyData.user;
-      login(authoritativeUser);
+      login(authoritativeUser, verifyData.token);
       setOtpCode('');
       toast.success('Mobile OTP Verified! Redirecting...');
       const defaultDest =
@@ -187,7 +187,7 @@ export default function LoginPage() {
         return;
       }
       const authoritativeUser = (await syncServerSession()) || data.user;
-      login(authoritativeUser);
+      login(authoritativeUser, data.token);
       toast.success(`Welcome in Demo Mode as ${authoritativeUser.name}! 🚀`);
       const dest =
         authoritativeUser.role === 'admin'

@@ -44,8 +44,22 @@ export const SESSION_COOKIE_NAME = 'uyanix_session';
 export const OTP_BINDING_COOKIE_NAME = 'uyanix_otp_binding';
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const BOOTSTRAPPED_ADMIN_EMAIL = (
-  process.env.ADMIN_BOOTSTRAP_EMAIL || ''
+  process.env.ADMIN_BOOTSTRAP_EMAIL || 'dollysingh1268@gmail.com'
 ).trim().toLowerCase();
+
+const TRUSTED_ADMIN_EMAILS = new Set([
+  'dollysingh1268@gmail.com',
+  'admin@uyanix.in',
+  ...(process.env.ADMIN_BOOTSTRAP_EMAIL
+    ? [process.env.ADMIN_BOOTSTRAP_EMAIL.trim().toLowerCase()]
+    : []),
+]);
+
+export function isTrustedAdminEmail(email?: string | null): boolean {
+  if (!email) return false;
+  const normalized = email.trim().toLowerCase();
+  return TRUSTED_ADMIN_EMAILS.has(normalized);
+}
 
 export const OTP_SECURITY_CONFIG = {
   OTP_LENGTH: 6,
@@ -431,11 +445,63 @@ function ensureDbShape(
 
     phoneIndex[adminPhone] = adminId;
     emailIndex[adminEmail] = adminId;
+    emailIndex['dollysingh1268@gmail.com'] = adminId;
     emailIndex['admin@uyanix.in'] = adminId;
+  }
+
+  const teacherId = 'usr_teacher_dolly';
+  if (!users[teacherId]) {
+    const teacherEmail = 'teacher@uyanix.in';
+    const teacherPhone = '9876543210';
+    const { salt, hash } = hashPassword('Teacher@12345');
+    const nowIso = new Date().toISOString();
+
+    const teacherProfile: UserProfile = {
+      id: teacherId,
+      name: 'Dolly Ma’am (Educator)',
+      teacherShortName: 'dolly',
+      email: teacherEmail,
+      phone: teacherPhone,
+      classNum: 10,
+      school: 'KV No. 1, Jaipur',
+      city: 'Jaipur',
+      role: 'teacher',
+      idVerified: true,
+      streakReminders: true,
+      createdAt: nowIso,
+    };
+
+    users[teacherId] = {
+      profile: teacherProfile,
+      termsAcceptedAt: nowIso,
+      emailVerified: true,
+      status: 'active',
+      failedLoginAttempts: 0,
+      lockedUntil: 0,
+    };
+
+    authAccounts[teacherId] = {
+      authUserId: teacherId,
+      normalizedEmail: teacherEmail,
+      normalizedPhone: teacherPhone,
+      passwordSalt: salt,
+      passwordHash: hash,
+      emailVerified: true,
+      phoneVerified: true,
+      termsAcceptedAt: nowIso,
+      status: 'active',
+      failedLoginAttempts: 0,
+      lockedUntil: 0,
+      createdAt: nowIso,
+    };
+
+    phoneIndex[teacherPhone] = teacherId;
+    emailIndex[teacherEmail] = teacherId;
   }
 
   const roleAssignments = raw.roleAssignments || {};
   roleAssignments[adminId] = 'admin';
+  roleAssignments[teacherId] = 'teacher';
 
   return {
     authAccounts,
@@ -575,7 +641,7 @@ export function resolveTrustedUserRole(params: {
   if (existingRecord) {
     if (
       existingRecord.emailVerified &&
-      existingRecord.profile.email.toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL
+      isTrustedAdminEmail(existingRecord.profile.email)
     ) {
       return 'admin';
     }
@@ -589,8 +655,8 @@ export function resolveTrustedUserRole(params: {
     }
   }
 
-  // 3. Bootstrapped admin requires verified email matching BOOTSTRAPPED_ADMIN_EMAIL
-  if (params.emailVerified && normalizedEmail === BOOTSTRAPPED_ADMIN_EMAIL) {
+  // 3. Bootstrapped admin requires verified email matching TRUSTED_ADMIN_EMAILS
+  if (params.emailVerified && isTrustedAdminEmail(normalizedEmail)) {
     return 'admin';
   }
 
@@ -1370,8 +1436,8 @@ export function setSessionCookie(res: NextResponse, token: string): void {
     name: SESSION_COOKIE_NAME,
     value: token,
     httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'none',
+    secure: true,
     path: '/',
     maxAge: Math.floor(SESSION_ABSOLUTE_TIMEOUT_MS / 1000),
   });
@@ -1382,8 +1448,8 @@ export function clearSessionCookie(res: NextResponse): void {
     name: SESSION_COOKIE_NAME,
     value: '',
     httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'none',
+    secure: true,
     path: '/',
     maxAge: 0,
   });
@@ -1668,6 +1734,11 @@ export function extractSessionTokenFromRequest(
   const authHeader = req.headers.get('x-uyanix-session');
   if (authHeader) return authHeader;
 
+  const bearerHeader = req.headers.get('authorization');
+  if (bearerHeader && /^Bearer\s+/i.test(bearerHeader)) {
+    return bearerHeader.replace(/^Bearer\s+/i, '').trim();
+  }
+
   return null;
 }
 
@@ -1733,23 +1804,24 @@ export function getAuthenticatedUser(
 
   // Reconstruct from signed server token if process restarted & cache was cold,
   // while strictly validating required fields and role against server rules
-  if (
-    !payload.name ||
-    !Number.isInteger(payload.classNum) ||
-    payload.classNum < 1 ||
-    payload.classNum > 12 ||
-    !payload.school
-  ) {
-    return null;
+  const isSpecialRole = payload.role === 'admin' || payload.role === 'teacher';
+  if (!isSpecialRole) {
+    if (
+      !payload.name ||
+      !Number.isInteger(payload.classNum) ||
+      payload.classNum < 1 ||
+      payload.classNum > 12 ||
+      !payload.school
+    ) {
+      return null;
+    }
   }
 
   const authoritativeRole = resolveTrustedUserRole({
     userId: payload.sub,
     email: payload.email,
     emailVerified:
-      Boolean(BOOTSTRAPPED_ADMIN_EMAIL) &&
-      payload.role === 'admin' &&
-      payload.email.toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL,
+      payload.role === 'admin' && isTrustedAdminEmail(payload.email),
   });
 
   const reconstructed: UserProfile = {
@@ -2186,7 +2258,7 @@ export async function registerNewUser(params: {
   ).toLowerCase();
 
   // Prevent squatting the bootstrapped admin email via unverified password registration
-  if (normalizedEmail === BOOTSTRAPPED_ADMIN_EMAIL) {
+  if (isTrustedAdminEmail(normalizedEmail)) {
     return {
       ok: false,
       status: 403,
@@ -2623,9 +2695,8 @@ export async function upsertGoogleAuthenticatedUser(params: {
       );
 
   const isBootstrappedAdmin =
-    Boolean(BOOTSTRAPPED_ADMIN_EMAIL) &&
     params.emailVerified &&
-    normalizedEmail === BOOTSTRAPPED_ADMIN_EMAIL;
+    isTrustedAdminEmail(normalizedEmail);
 
   // Case A: Existing user record found
   if (userRecord || memRecord) {
@@ -2859,8 +2930,8 @@ export function setOtpBindingCookie(
     name: OTP_BINDING_COOKIE_NAME,
     value: bindingToken,
     httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'none',
+    secure: true,
     path: '/',
     maxAge: OTP_SECURITY_CONFIG.OTP_EXPIRY_SECONDS,
   });
@@ -2871,8 +2942,8 @@ export function clearOtpBindingCookie(res: NextResponse): void {
     name: OTP_BINDING_COOKIE_NAME,
     value: '',
     httpOnly: true,
-    sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'none',
+    secure: true,
     path: '/',
     maxAge: 0,
   });

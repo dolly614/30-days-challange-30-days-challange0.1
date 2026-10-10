@@ -366,6 +366,7 @@ export async function POST(req: NextRequest) {
     const res = NextResponse.json({
       authenticated: true,
       user: result.user,
+      token: sessionToken,
     });
     setSessionCookie(res, sessionToken);
     return res;

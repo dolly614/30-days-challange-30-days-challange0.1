@@ -75,6 +75,7 @@ export async function POST(req: NextRequest) {
       ok: true,
       authenticated: true,
       user: demoUser,
+      token: sessionToken,
     });
     setSessionCookie(res, sessionToken);
     return res;

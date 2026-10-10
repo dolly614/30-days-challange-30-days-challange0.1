@@ -217,7 +217,12 @@ export async function middleware(req: NextRequest) {
     return attachSecurityHeaders(NextResponse.next(), req, false);
   }
 
-  const token = req.cookies.get(SESSION_COOKIE_NAME)?.value;
+  const token =
+    req.cookies.get(SESSION_COOKIE_NAME)?.value ||
+    req.headers.get('x-uyanix-session') ||
+    (req.headers.get('authorization')?.startsWith('Bearer ')
+      ? req.headers.get('authorization')?.slice(7).trim()
+      : undefined);
   const session = await verifyEdgeSessionToken(token);
 
   if (!session) {

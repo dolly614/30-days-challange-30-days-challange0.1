@@ -81,30 +81,43 @@ export default function AdminDashboardPage() {
 
   useEffect(() => {
     let active = true;
+    const fetchMetrics = () => {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('uyanix_token') : null;
+      fetch('/api/admin/metrics', {
+        credentials: 'include',
+        headers: token ? { 'x-uyanix-session': token, Authorization: `Bearer ${token}` } : {},
+      })
+        .then((res) => res.json())
+        .then((data) => {
+          if (!active) return;
+          if (data.ok && data.metrics) {
+            setMetrics(data.metrics);
+          }
+        })
+        .catch(() => {});
+    };
+
     syncServerSession().then((serverUser) => {
       if (!active) return;
       if (!serverUser) {
+        const localUser = useUyanixStore.getState().currentUser;
+        if (localUser?.role === 'admin') {
+          syncAdminVerifications();
+          fetchMetrics();
+          return;
+        }
         router.replace('/login?redirect=/admin');
       } else if (serverUser.role !== 'admin') {
         router.replace('/dashboard?error=admin_only');
       } else {
         syncAdminVerifications();
-        // Query authoritative metrics
-        fetch('/api/admin/metrics', { credentials: 'include' })
-          .then((res) => res.json())
-          .then((data) => {
-            if (!active) return;
-            if (data.ok && data.metrics) {
-              setMetrics(data.metrics);
-            }
-          })
-          .catch(() => {});
+        fetchMetrics();
       }
     });
     return () => {
       active = false;
     };
-  }, [syncServerSession, router]);
+  }, [syncServerSession, syncAdminVerifications, router]);
 
   // Authoritative metrics with reactive store fallback
   const totalRegistrationsCount = metrics?.totalRegistrations ?? leaderboard.length;
@@ -120,9 +133,13 @@ export default function AdminDashboardPage() {
     const toastId = toast.loading('Generating authoritative export on server...');
 
     try {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('uyanix_token') : null;
       const res = await fetch('/api/admin/action', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'x-uyanix-session': token, Authorization: `Bearer ${token}` } : {}),
+        },
         credentials: 'include',
         body: JSON.stringify({
           action: 'EXPORT_ADMIN_DATA',

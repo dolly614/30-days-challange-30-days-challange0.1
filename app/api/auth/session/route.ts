@@ -41,11 +41,13 @@ export async function GET(req: NextRequest) {
     return res;
   }
 
+  const token = extractSessionTokenFromRequest(req);
   return NextResponse.json(
     {
       authenticated: true,
       phoneVerified: getUserPhoneVerificationStatus(auth.user.id),
       user: auth.user,
+      token,
     },
     { headers: { 'Cache-Control': 'no-store' } }
   );

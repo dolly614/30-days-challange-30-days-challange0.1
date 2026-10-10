@@ -182,7 +182,7 @@ function RegisterContent() {
         return;
       }
 
-      login(data.user);
+      login(data.user, data.token);
       setPassword('');
       setConfirmPassword('');
 

@@ -4,7 +4,6 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import JSZip from 'jszip';
-import { PDFParse } from 'pdf-parse';
 import { z } from 'zod';
 import { getSupabaseAdminClient } from '@/lib/supabase-server';
 import { UserRole } from '@/lib/server-auth';
@@ -591,14 +590,36 @@ export async function parsePdfBuffer(
   }
 
   try {
-    const parser = new PDFParse({
-      data: new Uint8Array(buffer),
-    });
-    const textResult = await parser.getText();
-    const infoResult = await parser.getInfo().catch(() => null);
-    await parser.destroy().catch(() => {});
+    let extractedText = '';
+    let pageCount = 1;
+    let infoObj: Record<string, unknown> = {};
 
-    const sanitized = (textResult.text || '')
+    try {
+      const pdfParseModule = await import('pdf-parse');
+      const PDFParserClass = pdfParseModule.PDFParse || (pdfParseModule as any).default?.PDFParse || (pdfParseModule as any).default;
+      if (typeof PDFParserClass === 'function') {
+        const parser = new PDFParserClass({
+          data: new Uint8Array(buffer),
+        });
+        const textResult = await parser.getText();
+        const infoResult = await parser.getInfo().catch(() => null);
+        await parser.destroy().catch(() => {});
+        extractedText = textResult?.text || '';
+        pageCount = textResult?.pages?.length || 1;
+        infoObj = (infoResult?.info || {}) as Record<string, unknown>;
+      }
+    } catch {
+      // Robust binary stream text extraction fallback
+      const rawAscii = buffer.toString('latin1');
+      const textMatches = rawAscii.match(/\(([^()]*)\)\s*T[jJ]/g) || rawAscii.match(/\[(.*?)\]\s*TJ/g);
+      if (textMatches && textMatches.length > 0) {
+        extractedText = textMatches.map((m) => m.replace(/^[\(\[]/, '').replace(/[\)\]]\s*T[jJ]$/, '')).join(' ');
+      } else {
+        extractedText = rawAscii.replace(/[^\x20-\x7E\n\r\t]/g, ' ').replace(/\s+/g, ' ').trim();
+      }
+    }
+
+    const sanitized = (extractedText || '')
       .replace(/\0/g, '') // remove null bytes
       .replace(/[\x01-\x08\x0B\x0C\x0E-\x1F]/g, ' ') // control characters
       .replace(/\r\n/g, '\n')
@@ -607,8 +628,8 @@ export async function parsePdfBuffer(
 
     return {
       text: sanitized,
-      pageCount: textResult.pages?.length || 1,
-      info: (infoResult?.info || {}) as Record<string, unknown>,
+      pageCount,
+      info: infoObj,
     };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : 'Unknown PDF parsing failure';

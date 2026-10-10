@@ -180,7 +180,7 @@ interface UyanixState {
 
   // Actions
   syncServerSession: () => Promise<UserProfile | null>;
-  login: (user: UserProfile) => void;
+  login: (user: UserProfile, token?: string) => void;
   logout: () => Promise<void>;
   updateProfile: (updates: Partial<UserProfile>) => Promise<boolean>;
   toggleDarkMode: () => void;
@@ -392,11 +392,21 @@ export const useUyanixStore = create<UyanixState>()(
         const { requestEpoch } = beginAuthOrNavigationRequest(
           get().currentUser?.id ?? null
         );
+        const storedToken =
+          typeof window !== 'undefined'
+            ? localStorage.getItem('uyanix_token')
+            : null;
         try {
           const res = await fetch('/api/auth/session', {
             method: 'GET',
             credentials: 'include',
             cache: 'no-store',
+            headers: storedToken
+              ? {
+                  'x-uyanix-session': storedToken,
+                  Authorization: `Bearer ${storedToken}`,
+                }
+              : {},
           });
           const epochCheck = shouldAcceptAsyncNavigationResponse({
             requestEpoch,
@@ -405,6 +415,9 @@ export const useUyanixStore = create<UyanixState>()(
             return get().currentUser;
           }
           if (!res.ok) {
+            if (typeof window !== 'undefined') {
+              localStorage.removeItem('uyanix_token');
+            }
             invalidateInFlightNavigationOnAuthBoundary({
               reason: 'SESSION_EXPIRED',
               nextUserId: null,
@@ -426,6 +439,9 @@ export const useUyanixStore = create<UyanixState>()(
             return get().currentUser;
           }
           if (data?.authenticated && data?.user) {
+            if (typeof window !== 'undefined' && data?.token) {
+              localStorage.setItem('uyanix_token', data.token);
+            }
             const incomingUser = data.user as UserProfile;
             const prevUser = get().currentUser;
             const isUserSwitch =
@@ -471,7 +487,10 @@ export const useUyanixStore = create<UyanixState>()(
         }
       },
 
-      login: (serverVerifiedUser) => {
+      login: (serverVerifiedUser, token) => {
+        if (typeof window !== 'undefined' && token) {
+          localStorage.setItem('uyanix_token', token);
+        }
         const prevUser = get().currentUser;
         const isUserSwitch =
           prevUser !== null && prevUser.id !== serverVerifiedUser.id;
@@ -512,6 +531,9 @@ export const useUyanixStore = create<UyanixState>()(
       },
 
       logout: async () => {
+        if (typeof window !== 'undefined') {
+          localStorage.removeItem('uyanix_token');
+        }
         const actor = get().currentUser?.email || 'user';
         const target = get().currentUser?.name || 'session';
         // Immediately invalidate any in-flight navigation/session requests so stale responses cannot restore auth
