@@ -16,6 +16,7 @@ import {
 import { Header } from '@/components/site/Header';
 import { Footer } from '@/components/site/Footer';
 import { Countdown } from '@/components/site/Countdown';
+import { PrizesSection } from '@/components/site/PrizesSection';
 
 const FAQS = [
   {
@@ -262,63 +263,7 @@ export default function HomePage() {
       </section>
 
       {/* Prizes Section */}
-      <section className="bg-accent/40 py-20">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6">
-          <div className="mx-auto max-w-2xl text-center">
-            <p className="text-sm font-semibold uppercase tracking-widest text-primary">
-              Prizes
-            </p>
-            <h2 className="mt-2 text-3xl font-bold sm:text-4xl">
-              Top 3 winners ko{' '}
-              <span className="text-gradient">Laptop, Tablet &amp; Phone</span>
-            </h2>
-            <p className="mt-3 text-muted-foreground">
-              Aur har participant ko special gift + digital certificate guaranteed!
-            </p>
-          </div>
-
-          <div className="mt-12 grid gap-6 md:grid-cols-3">
-            <div className="card-interactive shimmer-container rounded-3xl bg-gradient-gold p-1 shadow-soft md:-translate-y-4">
-              <div className="rounded-[22px] bg-card p-7 text-center">
-                <div className="animate-trophy-glow inline-block text-5xl">💻</div>
-                <div className="mt-3 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-                  1st Place
-                </div>
-                <div className="mt-2 text-4xl font-extrabold text-foreground">Laptop</div>
-                <div className="mt-2 text-xs text-muted-foreground">
-                  Plus certificate + gift
-                </div>
-              </div>
-            </div>
-
-            <div className="card-interactive rounded-3xl bg-gradient-silver p-1 shadow-soft">
-              <div className="rounded-[22px] bg-card p-7 text-center">
-                <div className="inline-block text-5xl transition-transform duration-200 hover:scale-110">📱</div>
-                <div className="mt-3 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-                  2nd Place
-                </div>
-                <div className="mt-2 text-4xl font-extrabold text-foreground">Tablet</div>
-                <div className="mt-2 text-xs text-muted-foreground">
-                  Plus certificate + gift
-                </div>
-              </div>
-            </div>
-
-            <div className="card-interactive rounded-3xl bg-gradient-bronze p-1 shadow-soft">
-              <div className="rounded-[22px] bg-card p-7 text-center">
-                <div className="inline-block text-5xl transition-transform duration-200 hover:scale-110">📲</div>
-                <div className="mt-3 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-                  3rd Place
-                </div>
-                <div className="mt-2 text-4xl font-extrabold text-foreground">Smartphone</div>
-                <div className="mt-2 text-xs text-muted-foreground">
-                  Plus certificate + gift
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
+      <PrizesSection />
 
       {/* Countdown Banner */}
       <section className="mx-auto max-w-7xl px-4 py-16 sm:px-6">

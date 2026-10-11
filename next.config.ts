@@ -1,7 +1,6 @@
 import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
-  distDir: process.env.NODE_ENV === 'development' ? '.next-dev' : '.next',
   reactStrictMode: true,
   eslint: {
     ignoreDuringBuilds: true,
@@ -11,7 +10,12 @@ const nextConfig: NextConfig = {
   },
   images: {
     formats: ['image/avif', 'image/webp'],
-    remotePatterns: [],
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'images.unsplash.com',
+      },
+    ],
   },
   output: 'standalone',
   transpilePackages: ['motion'],

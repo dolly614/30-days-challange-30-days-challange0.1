@@ -48,6 +48,7 @@ export interface UserProfile {
   school: string;
   city: string;
   role: 'student' | 'teacher' | 'admin';
+  registrationId?: string;
   avatar?: string;
   idCardUrl?: string;
   idVerificationStatus?: string;

@@ -79,6 +79,18 @@ export default function ProfilePage() {
               <User className="h-4 w-4 text-primary" /> Personal &amp; Academic Details
             </div>
 
+            {currentUser?.registrationId && (
+              <div className="rounded-2xl border border-primary/20 bg-primary/5 p-3 flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground block">Official Registration ID</span>
+                  <span className="font-mono text-sm font-bold text-primary">{currentUser.registrationId}</span>
+                </div>
+                <span className="text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 rounded-full flex items-center gap-1">
+                  <CheckCircle2 className="h-3 w-3" /> Registered
+                </span>
+              </div>
+            )}
+
             <div className="grid gap-4 sm:grid-cols-2">
               <label className="block">
                 <span className="mb-1 block text-xs font-semibold text-muted-foreground">

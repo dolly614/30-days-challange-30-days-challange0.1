@@ -36,9 +36,13 @@ export default function DashboardPage() {
   useEffect(() => {
     let active = true;
     syncServerSession().then((serverUser) => {
-      if (active && !serverUser) {
+      if (!active) return;
+      if (!serverUser) {
         router.replace('/login?redirect=/dashboard');
-      } else if (active && serverUser) {
+      } else if (serverUser.role === 'student' && !serverUser.registrationId) {
+        toast.error('Registration ID anivarya hai (e.g. OEC2609535). Kripya Registration ID verify karein.');
+        router.replace('/register?step=1&error=registration_id_required');
+      } else {
         syncStudentProgress();
         syncLeaderboard();
       }
@@ -74,9 +78,16 @@ export default function DashboardPage() {
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className="text-sm text-muted-foreground">Welcome back,</p>
-            <h1 className="text-3xl font-bold sm:text-4xl">Hi {userName} 👋</h1>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <h1 className="text-3xl font-bold sm:text-4xl">Hi {userName} 👋</h1>
+              {currentUser?.registrationId && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-primary/10 border border-primary/20 px-2.5 py-1 text-xs font-mono font-bold text-primary">
+                  ID: {currentUser.registrationId}
+                </span>
+              )}
+            </div>
             <p className="mt-1 text-sm text-muted-foreground">
-              Class {userClass} • Apna progress dekho aur aaj ka task complete karo.
+              Class {userClass} • {currentUser?.registrationId ? `Reg ID: ${currentUser.registrationId} • ` : ''}Apna progress dekho aur aaj ka task complete karo.
             </p>
           </div>
 

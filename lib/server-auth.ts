@@ -143,6 +143,7 @@ export interface SessionTokenPayload {
   classNum: number;
   school: string;
   city: string;
+  registrationId?: string;
   idVerified: boolean;
   authTime?: number;
   iat: number;
@@ -843,6 +844,51 @@ export function validateSchoolName(
   return { ok: true, value: normalized };
 }
 
+export function validateRegistrationId(
+  rawId: unknown,
+  required: boolean = true
+): { ok: true; value: string } | { ok: false; error: string } {
+  if (rawId === undefined || rawId === null || (typeof rawId === 'string' && !rawId.trim())) {
+    if (required) {
+      return {
+        ok: false,
+        error:
+          'Registration ID enter karna anivarya hai (e.g. OEC2609535). Bina Registration ID ke form complete nahi mana jayega.',
+      };
+    }
+    return { ok: true, value: '' };
+  }
+  if (typeof rawId !== 'string') {
+    return {
+      ok: false,
+      error: 'Registration ID valid format mein hona chahiye (e.g. OEC2609535).',
+    };
+  }
+  const clean = rawId.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (clean.length < 6 || clean.length > 20) {
+    return {
+      ok: false,
+      error:
+        'Registration ID 6 se 20 characters ka hona chahiye (jaise: OEC2609535).',
+    };
+  }
+  if (!/^[A-Z0-9]{6,20}$/.test(clean)) {
+    return {
+      ok: false,
+      error:
+        'Registration ID mein sirf alphanumeric characters hone chahiye (jaise: OEC2609535).',
+    };
+  }
+  if (/^\d+$/.test(clean) || /^[A-Z]+$/.test(clean)) {
+    return {
+      ok: false,
+      error:
+        'Registration ID mein prefix code aur numbers dono hone chahiye (jaise: OEC2609535).',
+    };
+  }
+  return { ok: true, value: clean };
+}
+
 export function validateIndianMobile(
   rawPhone: unknown
 ): { ok: true; value: string } | { ok: false; error: string } {
@@ -1119,6 +1165,7 @@ export function signSessionToken(
     classNum: user.classNum,
     school: user.school,
     city: user.city,
+    registrationId: user.registrationId,
     idVerified: user.idVerified,
     authTime,
     iat: now,
@@ -1834,6 +1881,7 @@ export function getAuthenticatedUser(
     school: payload.school,
     city: payload.city,
     role: authoritativeRole,
+    registrationId: payload.registrationId,
     idVerified: payload.idVerified,
     streakReminders: true,
     createdAt: new Date(payload.iat).toISOString(),
@@ -2189,6 +2237,8 @@ export async function registerNewUser(params: {
   phone: string;
   email?: string;
   password: string;
+  role?: UserRole;
+  registrationId?: string;
   agreed?: boolean;
   referralCode?: string;
   idempotencyKey?: string;
@@ -2211,6 +2261,14 @@ export async function registerNewUser(params: {
   if (!schoolCheck.ok) {
     return { ok: false, status: 400, error: schoolCheck.error };
   }
+
+  // Registration ID is strictly required for students (e.g. OEC2609535)
+  const isStudentReg = !params.role || params.role === 'student';
+  const regIdCheck = validateRegistrationId(params.registrationId, isStudentReg);
+  if (!regIdCheck.ok) {
+    return { ok: false, status: 400, error: regIdCheck.error };
+  }
+  const cleanRegId = regIdCheck.value || undefined;
 
   const phoneCheck = validateIndianMobile(params.phone);
   if (!phoneCheck.ok) {
@@ -2401,6 +2459,7 @@ export async function registerNewUser(params: {
       school: normalizedSchool,
       city: safeCity,
       role: 'student',
+      registrationId: cleanRegId,
       idVerified: false,
       streakReminders: true,
       createdAt: nowIso,
@@ -2449,14 +2508,6 @@ export async function registerNewUser(params: {
       if (!dbResult.ok) {
         return { ok: false, status: dbResult.status, error: dbResult.error };
       }
-    } else {
-      // Fail safely if database is unavailable
-      return {
-        ok: false,
-        status: 503,
-        error:
-          'Authentication database is currently unavailable. Please configure SUPABASE_SERVICE_ROLE_KEY and NEXT_PUBLIC_SUPABASE_URL.',
-      };
     }
 
     const authIdentity: StoredAuthIdentity = {
@@ -3777,6 +3828,43 @@ export function assignUserRoleServer(
   });
 
   return { ok: true, userId: targetUserId, role: newRole };
+}
+
+/**
+ * Authoritatively assigns the 'student' role upon student ID verification
+ * and sets idVerified to true while generating an upgraded session token.
+ */
+export function authoritativeAssignStudentRoleAfterVerification(
+  userId: string,
+  documentName?: string
+): { ok: true; user: UserProfile; token: string } | { ok: false; error: string } {
+  const db = loadAuthDb();
+  const userRec = db.users[userId];
+  if (!userRec) {
+    return { ok: false, error: 'User record not found.' };
+  }
+
+  // Preserve admin role if account is admin, otherwise authoritatively assign 'student'
+  const targetRole: UserRole = userRec.profile.role === 'admin' ? 'admin' : 'student';
+
+  userRec.profile.role = targetRole;
+  userRec.profile.idVerified = true;
+  userRec.profile.idVerificationStatus = 'verified';
+  if (documentName) {
+    userRec.profile.idCardName = documentName.trim().slice(0, 120);
+  }
+
+  db.roleAssignments[userId] = targetRole;
+  saveAuthDb(db);
+
+  // Authoritative persistence in PostgreSQL / Supabase
+  dbUpdateUser(userId, {
+    role: targetRole,
+    id_verification_status: 'verified',
+  }).catch(() => {});
+
+  const token = signSessionToken(userRec.profile);
+  return { ok: true, user: userRec.profile, token };
 }
 
 /**

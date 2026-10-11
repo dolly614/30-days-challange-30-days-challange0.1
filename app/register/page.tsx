@@ -46,6 +46,7 @@ function RegisterContent() {
   const [name, setName] = useState('');
   const [classNum, setClassNum] = useState('1');
   const [school, setSchool] = useState('');
+  const [registrationId, setRegistrationId] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -61,11 +62,30 @@ function RegisterContent() {
 
   const submittingLockRef = useRef(false);
 
+  const isRegIdValid = (id: string) => {
+    const clean = id.trim().toUpperCase();
+    if (clean.length < 6 || clean.length > 20) return false;
+    if (!/^[A-Z0-9]{6,20}$/.test(clean)) return false;
+    // Must contain letters and numbers (like OEC2609535)
+    if (/^\d+$/.test(clean) || /^[A-Z]+$/.test(clean)) return false;
+    return true;
+  };
+
   useEffect(() => {
     if (currentUser?.id && !currentUser.idVerified && step === 1) {
+      if (currentUser.role === 'student' && !currentUser.registrationId) {
+        setStep(1);
+        return;
+      }
       setStep(2);
     }
   }, [currentUser, step]);
+
+  useEffect(() => {
+    if (currentUser?.registrationId && !registrationId) {
+      setRegistrationId(currentUser.registrationId);
+    }
+  }, [currentUser?.registrationId, registrationId]);
 
   useEffect(() => {
     if (step === 3) {
@@ -92,6 +112,16 @@ function RegisterContent() {
     const trimmedSchool = school.trim();
     if (!trimmedSchool || trimmedSchool.length < 2) {
       errors.school = accountType === 'teacher' ? 'School / Institute ka naam likhein.' : 'School ka naam enter karein.';
+    }
+
+    // Strict validation: Registration ID is required for students (e.g. OEC2609535)
+    if (accountType === 'student') {
+      const cleanRegId = registrationId.trim().toUpperCase();
+      if (!cleanRegId) {
+        errors.registrationId = 'Registration ID enter karna anivarya hai (jaise: OEC2609535). Bina Registration ID ke form submit nahi hoga.';
+      } else if (!isRegIdValid(cleanRegId)) {
+        errors.registrationId = 'Valid Registration ID enter karein (jaise: OEC2609535). Prefix code aur digits dono anivarya hain.';
+      }
     }
 
     const cleanPhone = phone.trim().replace(/\D/g, '');
@@ -152,6 +182,7 @@ function RegisterContent() {
           name: name.trim(),
           classNum: Number(classNum),
           school: school.trim(),
+          registrationId: accountType === 'student' ? registrationId.trim().toUpperCase() : undefined,
           phone: phone.trim().replace(/\D/g, '').slice(-10),
           email: email.trim() || undefined,
           password,
@@ -168,7 +199,9 @@ function RegisterContent() {
         const errorMsg = data?.error || 'Registration failed. Please check your details.';
         setServerError(errorMsg);
 
-        if (errorMsg.toLowerCase().includes('mobile') || errorMsg.toLowerCase().includes('phone')) {
+        if (errorMsg.toLowerCase().includes('registration')) {
+          setFieldErrors((prev) => ({ ...prev, registrationId: errorMsg }));
+        } else if (errorMsg.toLowerCase().includes('mobile') || errorMsg.toLowerCase().includes('phone')) {
           setFieldErrors((prev) => ({ ...prev, phone: errorMsg }));
         } else if (errorMsg.toLowerCase().includes('password')) {
           setFieldErrors((prev) => ({ ...prev, password: errorMsg }));
@@ -234,6 +267,9 @@ function RegisterContent() {
       if (!verifyRes.ok && verifyData?.error) {
         toast.error(verifyData.error || 'Verification upload failed. Aap dashboard se baad me try kar sakte hain.');
       } else {
+        if (verifyData?.user) {
+          login(verifyData.user, verifyData.token);
+        }
         toast.success('Student ID uploaded & submitted for verification! 🎉');
       }
 
@@ -436,6 +472,58 @@ function RegisterContent() {
               </label>
             </div>
 
+            {/* Registration ID (Mandatory for Student) */}
+            {accountType === 'student' && (
+              <div className="rounded-2xl border border-primary/25 bg-primary/5 p-4 transition-all">
+                <div className="flex items-center justify-between gap-2 mb-1.5">
+                  <label htmlFor="reg-id-input" className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                    <Sparkles className="h-3.5 w-3.5 text-primary" />
+                    Registration ID (Anivarya / Mandatory) *
+                  </label>
+                  <span className="rounded-full bg-primary/10 px-2.5 py-0.5 text-[10px] font-mono font-semibold text-primary">
+                    e.g. OEC2609535
+                  </span>
+                </div>
+                <div className="relative">
+                  <input
+                    id="reg-id-input"
+                    required
+                    placeholder="e.g. OEC2609535"
+                    value={registrationId}
+                    maxLength={20}
+                    onChange={(e) => {
+                      const val = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+                      setRegistrationId(val);
+                      if (fieldErrors.registrationId) {
+                        setFieldErrors((prev) => ({ ...prev, registrationId: '' }));
+                      }
+                    }}
+                    className={`h-11 w-full rounded-xl border bg-background px-4 font-mono text-sm tracking-wider font-semibold outline-none transition-all ${
+                      fieldErrors.registrationId
+                        ? 'border-destructive ring-2 ring-destructive/20'
+                        : isRegIdValid(registrationId)
+                        ? 'border-emerald-500 ring-2 ring-emerald-500/20'
+                        : 'border-input focus:border-primary focus:ring-2 focus:ring-primary/20'
+                    }`}
+                  />
+                  {isRegIdValid(registrationId) && (
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 text-xs font-semibold text-emerald-600 bg-emerald-50 dark:bg-emerald-950/70 px-2.5 py-0.5 rounded-md border border-emerald-200 dark:border-emerald-800">
+                      <CheckCircle2 className="h-3.5 w-3.5" /> Valid ID
+                    </span>
+                  )}
+                </div>
+                {fieldErrors.registrationId ? (
+                  <span className="mt-1.5 block text-xs font-medium text-destructive">
+                    {fieldErrors.registrationId}
+                  </span>
+                ) : (
+                  <p className="mt-1.5 text-[11px] text-muted-foreground">
+                    Aapka official Registration ID enter karein (jaise: <b className="font-mono text-foreground font-semibold">OEC2609535</b>). Bina valid Registration ID ke registration complete nahi hoga aur next page ka access nahi milega.
+                  </p>
+                )}
+              </div>
+            )}
+
             {/* Mobile Number */}
             <label className="block">
               <span className="mb-1.5 block text-xs font-semibold text-muted-foreground">
@@ -596,9 +684,16 @@ function RegisterContent() {
             className="animate-pop-in card-interactive mt-8 space-y-5 rounded-3xl border border-border bg-card p-6 shadow-card"
           >
             <div className="text-center">
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
-                Student: {currentUser?.name || name} (Class {currentUser?.classNum || classNum})
-              </span>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">
+                  Student: {currentUser?.name || name} (Class {currentUser?.classNum || classNum})
+                </span>
+                {(currentUser?.registrationId || registrationId) && (
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-mono font-semibold text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+                    <CheckCircle2 className="h-3.5 w-3.5" /> Reg ID: {currentUser?.registrationId || registrationId}
+                  </span>
+                )}
+              </div>
               <h2 className="mt-2 text-xl font-bold">Verify Your Student ID 🪪</h2>
               <p className="mt-1 text-xs text-muted-foreground">
                 School ID card, Report Card ya School Dress ki photo upload karein taaki aapki Class confirm ho sake.
@@ -635,6 +730,12 @@ function RegisterContent() {
               <button
                 type="button"
                 onClick={() => {
+                  const effectiveRegId = currentUser?.registrationId || registrationId;
+                  if (currentUser?.role === 'student' && !effectiveRegId) {
+                    toast.error('Registration ID missing! Kripya Step 1 me Registration ID fill karein.');
+                    setStep(1);
+                    return;
+                  }
                   toast.info('Verification deferred — aap baad mein Dashboard se bhi upload kar sakte hain.');
                   setStep(3);
                 }}
@@ -656,19 +757,45 @@ function RegisterContent() {
             <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground leading-relaxed">
               Aapka FREE registration complete ho gaya hai. Aaj se apna Day 1 chapter aur 5 MCQs shuru karein!
             </p>
+
+            <div className="mx-auto mt-4 max-w-xs rounded-2xl border border-primary/20 bg-primary/5 p-3 text-center">
+              <span className="text-[11px] font-medium text-muted-foreground block">Aapka Registered Student ID:</span>
+              <span className="font-mono text-base font-bold text-primary tracking-wider">
+                {currentUser?.registrationId || registrationId || 'OEC2609535'}
+              </span>
+            </div>
+
             <div className="mt-6 flex flex-wrap justify-center gap-3">
-              <Link
-                href="/dashboard"
+              <button
+                type="button"
+                onClick={() => {
+                  const effectiveRegId = currentUser?.registrationId || registrationId;
+                  if (currentUser?.role === 'student' && !effectiveRegId) {
+                    toast.error('Registration ID missing! Kripya pehle Registration ID fill karein.');
+                    setStep(1);
+                    return;
+                  }
+                  router.push('/dashboard');
+                }}
                 className="btn-interactive inline-flex h-12 items-center rounded-full bg-gradient-hero px-7 text-sm font-semibold text-primary-foreground shadow-soft"
               >
                 Go to Student Dashboard →
-              </Link>
-              <Link
-                href="/daily/1"
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const effectiveRegId = currentUser?.registrationId || registrationId;
+                  if (currentUser?.role === 'student' && !effectiveRegId) {
+                    toast.error('Registration ID missing! Kripya pehle Registration ID fill karein.');
+                    setStep(1);
+                    return;
+                  }
+                  router.push('/daily/1');
+                }}
                 className="btn-interactive inline-flex h-12 items-center rounded-full border border-border bg-card px-7 text-sm font-semibold hover:bg-accent"
               >
                 Start Day 1 Chapter
-              </Link>
+              </button>
             </div>
           </div>
         )}

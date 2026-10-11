@@ -11,6 +11,20 @@ export async function GET(req: NextRequest) {
     return auth.response;
   }
 
+  // Server-side check: Students must possess a valid Registration ID to access progress & dashboard
+  if (auth.user.role === 'student' && !auth.user.registrationId) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error:
+          'Registration ID anivarya hai (e.g. OEC2609535). Bina Registration ID ke student progress access nahi kiya ja sakta.',
+        errorCode: 'REGISTRATION_ID_REQUIRED',
+        requiresRegistrationId: true,
+      },
+      { status: 403 }
+    );
+  }
+
   const rate = enforceRateLimit(`student_progress:${auth.user.id}`, 60, 60_000);
   if (!rate.allowed) {
     return NextResponse.json(

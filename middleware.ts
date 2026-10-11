@@ -73,6 +73,7 @@ interface EdgeSessionPayload {
   jti: string;
   sub: string;
   role: 'student' | 'teacher' | 'admin';
+  registrationId?: string;
   email: string;
   exp: number;
 }
@@ -233,6 +234,18 @@ export async function middleware(req: NextRequest) {
     );
     loginUrl.searchParams.set('redirect', safeRedirectPath);
     return attachSecurityHeaders(NextResponse.redirect(loginUrl), req, true);
+  }
+
+  // Student progression to dashboard requires mandatory Registration ID
+  if (
+    (pathname === '/dashboard' || pathname.startsWith('/dashboard/')) &&
+    session.role === 'student' &&
+    !session.registrationId
+  ) {
+    const regRedirectUrl = new URL('/register', req.url);
+    regRedirectUrl.searchParams.set('step', '1');
+    regRedirectUrl.searchParams.set('error', 'registration_id_required');
+    return attachSecurityHeaders(NextResponse.redirect(regRedirectUrl), req, true);
   }
 
   // Admin-only routes

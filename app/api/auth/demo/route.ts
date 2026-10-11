@@ -64,6 +64,7 @@ export async function POST(req: NextRequest) {
         school: 'Delhi Public School',
         city: 'Jaipur',
         role: 'student',
+        registrationId: 'OEC2609535',
         idVerified: true,
         streakReminders: true,
         createdAt: new Date().toISOString(),

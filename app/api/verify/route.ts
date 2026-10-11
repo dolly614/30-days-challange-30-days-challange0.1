@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
+  authoritativeAssignStudentRoleAfterVerification,
   enforceRateLimit,
   getClientIp,
   requireAuthenticatedUser,
   requireOwnershipOrAdmin,
+  setSessionCookie,
 } from '@/lib/server-auth';
 import {
   authorizeFileDownloadAndGenerateSignedUrl,
@@ -173,18 +175,33 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      return NextResponse.json(
+      // Authoritatively assign 'student' role and verified status on server
+      const assignRes = authoritativeAssignStudentRoleAfterVerification(
+        guard.user.id,
+        documentName.trim()
+      );
+
+      const res = NextResponse.json(
         {
           valid: true,
-          verificationStatus: 'pending',
+          verificationStatus: 'verified',
           fileId: uploadResult.fileRecord.file_id,
           purpose: uploadResult.fileRecord.purpose,
           bucket: uploadResult.fileRecord.bucket,
           visibility: uploadResult.fileRecord.visibility,
           checkedAt: uploadResult.fileRecord.created_at,
+          user: assignRes.ok ? assignRes.user : undefined,
+          token: assignRes.ok ? assignRes.token : undefined,
+          role: assignRes.ok ? assignRes.user.role : 'student',
         },
         { status: 201 }
       );
+
+      if (assignRes.ok && assignRes.token) {
+        setSessionCookie(res, assignRes.token);
+      }
+
+      return res;
     }
 
     const effectiveStudentEmail = (

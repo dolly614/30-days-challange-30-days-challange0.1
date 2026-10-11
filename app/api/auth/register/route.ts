@@ -12,6 +12,7 @@ import {
   validateFullName,
   validateIndianMobile,
   validateOptionalEmail,
+  validateRegistrationId,
   validateSchoolName,
   validateStudentClass,
   verifyCsrfAndCors,
@@ -91,6 +92,7 @@ const ALLOWED_REGISTRATION_FIELDS = new Set([
   'email',
   'password',
   'confirmPassword',
+  'registrationId',
   'agreed',
   'termsAccepted',
   'policyVersion',
@@ -224,6 +226,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: schoolResult.error }, { status: 400 });
     }
 
+    const regIdResult = validateRegistrationId(bodyObj.registrationId, true);
+    if (!regIdResult.ok) {
+      return NextResponse.json({ error: regIdResult.error }, { status: 400 });
+    }
+
     const phoneResult = validateIndianMobile(bodyObj.phone);
     if (!phoneResult.ok) {
       return NextResponse.json({ error: phoneResult.error }, { status: 400 });
@@ -324,6 +331,7 @@ export async function POST(req: NextRequest) {
       phone: phoneResult.value,
       email: emailResult.value,
       password,
+      registrationId: regIdResult.value,
       agreed: true,
       referralCode:
         typeof bodyObj.referralCode === 'string'
