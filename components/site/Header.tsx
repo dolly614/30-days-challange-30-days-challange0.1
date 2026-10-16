@@ -40,9 +40,9 @@ export function Header() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   useEffect(() => {
-    useUyanixStore.persist.rehydrate();
-    syncServerSession();
-    testFirestoreConnection();
+    useUyanixStore.persist?.rehydrate?.();
+    syncServerSession?.();
+    testFirestoreConnection?.();
   }, [syncServerSession]);
 
   useEffect(() => {
@@ -59,6 +59,7 @@ export function Header() {
     { href: '/dashboard', label: 'Dashboard' },
     { href: '/teacher', label: 'Teacher' },
     { href: '/admin', label: 'Admin' },
+    { href: '/checkout', label: 'Checkout' },
     { href: '/sheets', label: 'Google Sheets' },
   ] as const;
 

@@ -100,12 +100,6 @@ export default function AdminDashboardPage() {
     syncServerSession().then((serverUser) => {
       if (!active) return;
       if (!serverUser) {
-        const localUser = useUyanixStore.getState().currentUser;
-        if (localUser?.role === 'admin') {
-          syncAdminVerifications();
-          fetchMetrics();
-          return;
-        }
         router.replace('/login?redirect=/admin');
       } else if (serverUser.role !== 'admin') {
         router.replace('/dashboard?error=admin_only');

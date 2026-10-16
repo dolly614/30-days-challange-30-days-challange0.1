@@ -1,18 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireAuthenticatedUser } from '@/lib/server-auth';
+import { requireAdmin } from '@/lib/server-auth';
 import { parsePdfBuffer } from '@/lib/admin-authoritative-service';
 
 export async function POST(req: NextRequest) {
-  const auth = requireAuthenticatedUser(req);
+  const auth = requireAdmin(req);
   if (!auth.ok) {
     return auth.response;
-  }
-
-  if (auth.user.role !== 'admin') {
-    return NextResponse.json(
-      { ok: false, error: 'Administrator privileges required.', errorCode: 'ADMIN_REQUIRED' },
-      { status: 403 }
-    );
   }
 
   try {

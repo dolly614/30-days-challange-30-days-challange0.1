@@ -18,6 +18,7 @@ import { Footer } from '@/components/site/Footer';
 import { useUyanixStore } from '@/lib/store';
 import { toast } from 'sonner';
 import confetti from 'canvas-confetti';
+import { RazorpayCheckoutButton } from '@/components/payment/RazorpayCheckoutButton';
 
 interface SanitizedQuestionView {
   id: string;
@@ -397,15 +398,29 @@ function ExamPortalContent() {
             </div>
           </div>
 
-          <button
-            type="button"
-            disabled={paying}
-            onClick={handleRazorpayPay}
-            className="mt-6 inline-flex h-12 w-full items-center justify-center gap-2 rounded-full bg-gradient-hero text-sm font-semibold text-primary-foreground shadow-soft transition hover:scale-[1.01] disabled:opacity-60"
-          >
-            <CreditCard className="h-4 w-4" />
-            {paying ? 'Verifying Razorpay Payment...' : 'Pay ₹199 via Razorpay & Start Exam →'}
-          </button>
+          <RazorpayCheckoutButton
+            amount={19900}
+            currency="INR"
+            name="Uyanix 30 Days Challenge"
+            description={`${examType === 'final' ? '30-Day Grand Final' : '15-Day Mid Challenge'} Exam Registration Fee`}
+            prefill={{
+              name: currentUser?.name || 'Student',
+              email: currentUser?.email || 'student@example.com',
+              contact: currentUser?.phone || '9876543210',
+            }}
+            examType={examType}
+            buttonText="Pay ₹199 via Razorpay & Start Exam →"
+            className="mt-6 w-full h-12 text-sm shadow-soft transition hover:scale-[1.01]"
+            onSuccess={(result) => {
+              payForExam(examType, result.order_id);
+              setIsServerPaid(true);
+              setStage('instructions');
+              confetti({ particleCount: 75, spread: 60, origin: { y: 0.6 } });
+            }}
+            onFailure={(err) => {
+              console.log('Payment modal dismissed or failed:', err);
+            }}
+          />
 
           <p className="mt-3 text-center text-[11px] text-muted-foreground">
             🔒 100% Secure Razorpay Checkout • UPI, GPay, PhonePe, Cards &amp; NetBanking supported
