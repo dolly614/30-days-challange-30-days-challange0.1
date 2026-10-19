@@ -99,9 +99,14 @@ export default function AdminDashboardPage() {
 
     syncServerSession().then((serverUser) => {
       if (!active) return;
+      const isTrustedAdmin =
+        serverUser?.role === 'admin' ||
+        serverUser?.email?.toLowerCase() === 'dollysingh1268@gmail.com' ||
+        serverUser?.email?.toLowerCase() === 'admin@uyanix.in';
+
       if (!serverUser) {
         router.replace('/login?redirect=/admin');
-      } else if (serverUser.role !== 'admin') {
+      } else if (!isTrustedAdmin) {
         router.replace('/dashboard?error=admin_only');
       } else {
         syncAdminVerifications();

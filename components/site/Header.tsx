@@ -13,6 +13,7 @@ import {
   Menu,
   X,
   CheckCheck,
+  Share2,
 } from 'lucide-react';
 import { BrandMark } from './BrandMark';
 import { PWAInstallButton } from './PWAInstallButton';
@@ -72,6 +73,33 @@ export function Header() {
     router.refresh();
   };
 
+  const handleSharePublicLink = async () => {
+    const publicUrl = 'https://ais-pre-5zdbnjqwhbhkamaediw3lp-153204709279.asia-east1.run.app';
+    if (typeof navigator !== 'undefined' && navigator.share) {
+      try {
+        await navigator.share({
+          title: 'Uyanix 30 Days Challenge',
+          text: 'India’s biggest 30-day daily learning challenge for Class 1–12! Register FREE, learn daily, win grand prizes 🏆',
+          url: publicUrl,
+        });
+        toast.success('Website link shared successfully! 🚀');
+        return;
+      } catch {
+        // Fallback to clipboard
+      }
+    }
+    try {
+      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+        await navigator.clipboard.writeText(publicUrl);
+        toast.success('Public website link copied to clipboard! Ab aap ise WhatsApp ya kisi ke bhi sath share kar sakte hain 🚀');
+        return;
+      }
+    } catch {
+      // Fallback
+    }
+    toast.info(`Public Website URL: ${publicUrl}`);
+  };
+
   return (
     <>
       <header className="sticky top-0 z-40 w-full border-b border-border/60 bg-background/80 backdrop-blur-lg">
@@ -117,6 +145,17 @@ export function Header() {
           </nav>
 
           <div className="flex items-center gap-2">
+            {/* Share App Public Link */}
+            <button
+              type="button"
+              onClick={handleSharePublicLink}
+              title="Share Website Link"
+              className="btn-interactive inline-flex h-10 items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-3.5 text-xs font-semibold text-primary transition hover:bg-primary/20"
+            >
+              <Share2 className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Share Website</span>
+            </button>
+
             <PWAInstallButton />
 
             {/* Dark Mode Toggle */}
@@ -245,6 +284,16 @@ export function Header() {
                   {item.label}
                 </Link>
               ))}
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  handleSharePublicLink();
+                }}
+                className="flex items-center gap-2 rounded-xl bg-primary/10 px-3 py-2 text-left font-semibold text-primary hover:bg-primary/20"
+              >
+                <Share2 className="h-4 w-4" /> Share Public Website Link
+              </button>
               <Link
                 href="/profile"
                 onClick={() => setMobileMenuOpen(false)}

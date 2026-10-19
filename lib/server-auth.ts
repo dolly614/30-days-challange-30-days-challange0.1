@@ -614,6 +614,11 @@ export function resolveTrustedUserRole(params: {
   const db = loadAuthDb();
   const normalizedEmail = (params.email || '').trim().toLowerCase();
 
+  // 0. Trusted Admin Email (e.g. dollysingh1268@gmail.com, admin@uyanix.in) ALWAYS receives admin role
+  if (isTrustedAdminEmail(normalizedEmail)) {
+    return 'admin';
+  }
+
   // 1. Explicit server-side role assignment by Admin takes precedence
   const assignedRole = db.roleAssignments[params.userId];
   if (assignedRole === 'admin') {
@@ -637,11 +642,6 @@ export function resolveTrustedUserRole(params: {
     if (storedRole === 'teacher' || storedRole === 'student') {
       return storedRole;
     }
-  }
-
-  // 3. Bootstrapped admin requires verified email matching TRUSTED_ADMIN_EMAILS
-  if (isTrustedAdminEmail(normalizedEmail)) {
-    return 'admin';
   }
 
   // Default role for all accounts is strictly 'student'

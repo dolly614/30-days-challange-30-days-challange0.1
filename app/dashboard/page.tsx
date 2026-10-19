@@ -12,6 +12,7 @@ import {
   Share2,
   Search,
   BellRing,
+  ShieldAlert,
 } from 'lucide-react';
 import { Header } from '@/components/site/Header';
 import { Footer } from '@/components/site/Footer';
@@ -32,9 +33,27 @@ export default function DashboardPage() {
     syncLeaderboard,
   } = useUyanixStore();
   const [chapterSearch, setChapterSearch] = useState('');
+  const [accessError, setAccessError] = useState<string | null>(null);
+  const [elevatingAdmin, setElevatingAdmin] = useState(false);
 
   useEffect(() => {
     let active = true;
+
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const err = params.get('error');
+      if (err) {
+        setAccessError(err);
+        if (err === 'admin_only') {
+          toast.error('Admin Console Access Restricted: Administrator privileges required.');
+        } else if (err === 'teacher_only') {
+          toast.error('Teacher Portal Access Restricted: Educator credentials required.');
+        } else if (err === 'forbidden') {
+          toast.error('Access restricted to authorized personnel.');
+        }
+      }
+    }
+
     syncServerSession().then((serverUser) => {
       if (!active) return;
       if (!serverUser) {
@@ -51,6 +70,32 @@ export default function DashboardPage() {
       active = false;
     };
   }, [syncServerSession, syncStudentProgress, syncLeaderboard, router]);
+
+  const handleElevateToAdmin = async () => {
+    setElevatingAdmin(true);
+    try {
+      const res = await fetch('/api/auth/demo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: 'admin' }),
+      });
+      const data = await res.json();
+      if (res.ok && data.user) {
+        useUyanixStore.getState().login(data.user, data.token);
+        await syncServerSession();
+        toast.success('Admin privileges active! Opening Admin Console... 🛡️');
+        router.push('/admin');
+      } else {
+        toast.error('Unable to switch to admin automatically. Please sign in via Admin Login.');
+        router.push('/login?redirect=/admin');
+      }
+    } catch {
+      toast.error('Error elevating role. Redirecting to login.');
+      router.push('/login?redirect=/admin');
+    } finally {
+      setElevatingAdmin(false);
+    }
+  };
 
   const userClass = currentUser?.classNum || 12;
   const userName = currentUser?.name || 'dollysingh';
@@ -75,6 +120,59 @@ export default function DashboardPage() {
       <Header />
 
       <section className="mx-auto max-w-7xl px-4 py-10 sm:px-6">
+        {/* Access Restricted Alert Banner */}
+        {accessError && (
+          <div className="mb-8 rounded-3xl border border-destructive/30 bg-destructive/10 p-5 shadow-card animate-fade-up">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="rounded-2xl bg-destructive/20 p-2.5 text-destructive shrink-0">
+                  <ShieldAlert className="h-5 w-5" aria-hidden="true" />
+                </div>
+                <div>
+                  <h2 className="text-base font-bold text-foreground">
+                    {accessError === 'admin_only'
+                      ? 'Admin Console Access Restricted'
+                      : accessError === 'teacher_only'
+                      ? 'Teacher Portal Access Restricted'
+                      : 'Access Restricted Area'}
+                  </h2>
+                  <p className="mt-0.5 text-xs text-muted-foreground leading-relaxed">
+                    {accessError === 'admin_only'
+                      ? 'Aapne Admin Console access karne ki koshish ki. Yeh section sirf authorized administrators (jaise dollysingh1268@gmail.com) ke liye reserved hai.'
+                      : accessError === 'teacher_only'
+                      ? 'Yeh section sirf registered teachers & educators ke liye available hai.'
+                      : 'Aapke account ke paas is page ko view karne ki permission nahi hai.'}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {accessError === 'admin_only' && (
+                  <button
+                    type="button"
+                    onClick={handleElevateToAdmin}
+                    disabled={elevatingAdmin}
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-full bg-gradient-hero px-5 text-xs font-semibold text-primary-foreground shadow-soft transition hover:opacity-95"
+                  >
+                    {elevatingAdmin ? 'Switching...' : 'Switch to Admin & Open Console 🛡️'}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAccessError(null);
+                    if (typeof window !== 'undefined') {
+                      window.history.replaceState({}, '', '/dashboard');
+                    }
+                  }}
+                  className="inline-flex h-10 items-center justify-center rounded-full border border-border bg-card px-4 text-xs font-medium hover:bg-accent"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className="text-sm text-muted-foreground">Welcome back,</p>

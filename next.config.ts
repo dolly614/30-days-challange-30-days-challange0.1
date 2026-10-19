@@ -18,7 +18,6 @@ const nextConfig: NextConfig = {
     ],
   },
   transpilePackages: ['motion'],
-  typedRoutes: true,
 };
 
 export default nextConfig;

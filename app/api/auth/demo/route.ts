@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
         id: 'usr_admin_dolly',
         name: 'Dolly Singh (Admin)',
         teacherShortName: 'dolly',
-        email: 'admin@uyanix.in',
+        email: 'dollysingh1268@gmail.com',
         phone: '9897320579',
         classNum: 12,
         school: 'Uyanix Headquarters',
@@ -56,9 +56,9 @@ export async function POST(req: NextRequest) {
     } else {
       demoUser = {
         id: 'usr_student_demo',
-        name: 'Dolly Singh',
-        teacherShortName: 'dolly',
-        email: 'dollysingh1268@gmail.com',
+        name: 'Aarav Sharma (Student)',
+        teacherShortName: 'aarav',
+        email: 'student.aarav@uyanix.in',
         phone: '9000012345',
         classNum: 12,
         school: 'Delhi Public School',

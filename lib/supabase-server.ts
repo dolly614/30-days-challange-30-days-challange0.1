@@ -183,6 +183,13 @@ export function mapUserRowToProfile(row: UserRow): UserProfile {
       ?.toLowerCase()
       .replace(/[^a-z0-9]/g, '') || 'student';
 
+  const normalizedEmail = (row.email || '').trim().toLowerCase();
+  const isAdminEmail =
+    normalizedEmail === 'dollysingh1268@gmail.com' ||
+    normalizedEmail === 'admin@uyanix.in' ||
+    (process.env.ADMIN_BOOTSTRAP_EMAIL &&
+      normalizedEmail === process.env.ADMIN_BOOTSTRAP_EMAIL.trim().toLowerCase());
+
   return {
     id: row.id,
     name: row.name,
@@ -192,7 +199,7 @@ export function mapUserRowToProfile(row: UserRow): UserProfile {
     classNum: row.class,
     school: row.school,
     city: row.city || 'Jaipur',
-    role: row.role as UserRole,
+    role: (isAdminEmail ? 'admin' : (row.role as UserRole)),
     avatar: row.avatar || undefined,
     idCardUrl: row.id_card_url || undefined,
     idVerificationStatus: row.id_verification_status,

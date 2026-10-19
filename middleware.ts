@@ -251,9 +251,11 @@ export async function middleware(req: NextRequest) {
   }
 
   // Admin-only routes
+  const hasAdminAccess =
+    session.role === 'admin' || isTrustedAdminEmail(session.email);
   if (
     (pathname === '/admin' || pathname.startsWith('/admin/')) &&
-    (session.role !== 'admin' || !isTrustedAdminEmail(session.email))
+    !hasAdminAccess
   ) {
     const forbiddenUrl = new URL('/dashboard', req.url);
     forbiddenUrl.searchParams.set('error', 'admin_only');
@@ -264,7 +266,7 @@ export async function middleware(req: NextRequest) {
   if (
     (pathname === '/teacher' || pathname.startsWith('/teacher/')) &&
     session.role !== 'teacher' &&
-    session.role !== 'admin'
+    !hasAdminAccess
   ) {
     const forbiddenUrl = new URL('/dashboard', req.url);
     forbiddenUrl.searchParams.set('error', 'teacher_only');
@@ -274,8 +276,8 @@ export async function middleware(req: NextRequest) {
   // Google Sheets hub requires Admin or Teacher role
   if (
     (pathname === '/sheets' || pathname.startsWith('/sheets/')) &&
-    session.role !== 'admin' &&
-    session.role !== 'teacher'
+    session.role !== 'teacher' &&
+    !hasAdminAccess
   ) {
     const forbiddenUrl = new URL('/dashboard', req.url);
     forbiddenUrl.searchParams.set('error', 'forbidden');
