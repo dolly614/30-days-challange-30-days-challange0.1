@@ -119,30 +119,26 @@ export default function HomePage() {
                   const isDone = dayNum <= 12;
                   const isToday = dayNum === 13;
                   return (
-                    <Link
+                    <div
                       key={dayNum}
-                      href={`/daily/${dayNum}`}
-                      title={`Go to Day ${dayNum}`}
-                      className={`aspect-square rounded-md transition-all duration-150 hover:scale-125 ${
+                      aria-label={`Day ${dayNum}`}
+                      className={`aspect-square rounded-md transition-all duration-150 ${
                         isDone
                           ? 'bg-secondary'
                           : isToday
                           ? 'bg-primary ring-2 ring-primary/50 ring-offset-1 animate-pulse-glow'
-                          : 'bg-muted hover:bg-muted-foreground/30'
+                          : 'bg-muted'
                       }`}
                     />
                   );
                 })}
               </div>
 
-              <Link
-                href="/daily/13"
-                className="mt-6 block rounded-2xl bg-accent p-4 transition hover:opacity-95"
-              >
+              <div className="mt-6 block rounded-2xl bg-accent p-4">
                 <div className="text-xs font-medium text-primary">Aaj ka task</div>
                 <div className="mt-1 font-semibold">Day 13: Indian Constitution Basics</div>
                 <div className="mt-1 text-xs text-muted-foreground">5 MCQs • ~10 mins</div>
-              </Link>
+              </div>
 
               <div className="mt-4 grid grid-cols-3 gap-2 text-center">
                 <div className="rounded-xl bg-muted/60 p-3">

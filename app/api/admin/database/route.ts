@@ -89,9 +89,8 @@ export async function POST(req: NextRequest) {
   try {
     const seedResult = await runFullDatabaseSeed();
     return NextResponse.json({
-      ok: true,
-      message: 'Database schema and seed records initialized successfully.',
       ...seedResult,
+      message: 'Database schema and seed records initialized successfully.',
     });
   } catch (error: unknown) {
     return NextResponse.json(
