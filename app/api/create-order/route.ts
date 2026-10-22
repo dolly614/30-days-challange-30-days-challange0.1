@@ -29,19 +29,42 @@ export async function POST(req: NextRequest) {
     }
 
     const rawAmount = body.amount;
-    const amount = Number(rawAmount);
+    const inputAmount = Number(rawAmount);
 
-    // Minimum amount validation: must be a valid number >= 100 paise (₹1)
-    if (!Number.isFinite(amount) || !Number.isInteger(amount) || amount < 100) {
+    if (!Number.isFinite(inputAmount) || inputAmount <= 0) {
       return NextResponse.json(
         {
           success: false,
           error:
-            'Invalid amount. Amount must be an integer and at least 100 paise (₹1).',
+            'Invalid amount specified. Please provide a valid exam fee amount.',
         },
         { status: 400 }
       );
     }
+
+    // Convert input amount to paise if specified in rupees (e.g. 199 -> 19900, 99 -> 9900)
+    let amountInPaise = inputAmount;
+    if (amountInPaise === 199 || amountInPaise === 99) {
+      amountInPaise = amountInPaise * 100;
+    }
+
+    // Authorized exam prices: ₹199 (19900 paise) or ₹99 (9900 paise).
+    // Client-side price tampering (e.g. creating ₹1 / 100 paise orders) is strictly rejected.
+    const AUTHORIZED_PRICES = new Set([19900, 9900]);
+
+    if (!AUTHORIZED_PRICES.has(amountInPaise)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            'Unauthorized order amount. Price tampering is strictly prohibited. Authorized exam fee is ₹199 (19900 paise).',
+          errorCode: 'UNAUTHORIZED_PRICE',
+        },
+        { status: 400 }
+      );
+    }
+
+    const amount = amountInPaise;
 
     const currency =
       typeof body.currency === 'string' && body.currency.trim()

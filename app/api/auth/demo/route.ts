@@ -17,6 +17,18 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // 1. Permanently disable demo backdoor in production
+  if (process.env.NODE_ENV === 'production') {
+    return NextResponse.json(
+      {
+        error:
+          'Demo authentication backdoor is permanently disabled in production environments.',
+        errorCode: 'DEMO_MODE_DISABLED',
+      },
+      { status: 403 }
+    );
+  }
+
   try {
     const body = await req.json();
     const role = body?.role || 'student';
@@ -25,13 +37,13 @@ export async function POST(req: NextRequest) {
 
     if (role === 'admin') {
       demoUser = {
-        id: 'usr_admin_dolly',
-        name: 'Dolly Singh (Admin)',
-        teacherShortName: 'dolly',
-        email: 'dollysingh1268@gmail.com',
-        phone: '9897320579',
+        id: 'usr_admin_demo',
+        name: 'System Administrator',
+        teacherShortName: 'admin',
+        email: 'admin@uyanix.in',
+        phone: '9000000001',
         classNum: 12,
-        school: 'Uyanix Headquarters',
+        school: 'Uyanix Administrative Portal',
         city: 'Jaipur',
         role: 'admin',
         idVerified: true,
@@ -40,13 +52,13 @@ export async function POST(req: NextRequest) {
       };
     } else if (role === 'teacher') {
       demoUser = {
-        id: 'usr_teacher_dolly',
-        name: 'Dolly Ma’am (Educator)',
-        teacherShortName: 'dolly',
+        id: 'usr_teacher_demo',
+        name: 'Demo Educator',
+        teacherShortName: 'educator',
         email: 'teacher@uyanix.in',
-        phone: '9876543210',
+        phone: '9000000002',
         classNum: 10,
-        school: 'KV No. 1, Jaipur',
+        school: 'Central Academy',
         city: 'Jaipur',
         role: 'teacher',
         idVerified: true,
@@ -65,7 +77,7 @@ export async function POST(req: NextRequest) {
         city: 'Jaipur',
         role: 'student',
         registrationId: 'OEC2609535',
-        idVerified: true,
+        idVerified: false,
         streakReminders: true,
         createdAt: new Date().toISOString(),
       };

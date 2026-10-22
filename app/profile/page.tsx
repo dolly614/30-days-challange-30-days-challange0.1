@@ -25,19 +25,27 @@ export default function ProfilePage() {
     };
   }, [syncServerSession, router]);
 
-  const [name, setName] = useState(currentUser?.name || 'dollysingh');
-  const [classNum, setClassNum] = useState(String(currentUser?.classNum || 12));
-  const [school, setSchool] = useState(
-    currentUser?.school || 'Delhi Public School, Jaipur'
-  );
-  const [city, setCity] = useState(currentUser?.city || 'Jaipur');
-  const [phone, setPhone] = useState(currentUser?.phone || '9000012345');
-  const [email, setEmail] = useState(
-    currentUser?.email || 'dollysingh1268@gmail.com'
-  );
+  const [name, setName] = useState(currentUser?.name || 'Student');
+  const [classNum, setClassNum] = useState(String(currentUser?.classNum || 10));
+  const [school, setSchool] = useState(currentUser?.school || '');
+  const [city, setCity] = useState(currentUser?.city || '');
+  const [phone, setPhone] = useState(currentUser?.phone || '');
+  const [email, setEmail] = useState(currentUser?.email || '');
   const [streakReminders, setStreakReminders] = useState(
     currentUser?.streakReminders ?? true
   );
+
+  useEffect(() => {
+    if (currentUser) {
+      setName(currentUser.name || 'Student');
+      setClassNum(String(currentUser.classNum || 10));
+      setSchool(currentUser.school || '');
+      setCity(currentUser.city || '');
+      setPhone(currentUser.phone || '');
+      setEmail(currentUser.email || '');
+      setStreakReminders(currentUser.streakReminders ?? true);
+    }
+  }, [currentUser]);
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
@@ -66,7 +74,7 @@ export default function ProfilePage() {
             </p>
           </div>
           <div className="inline-flex items-center gap-2 rounded-full bg-secondary/15 px-4 py-2 text-xs font-bold text-secondary">
-            <CheckCircle2 className="h-4 w-4" /> Student ID Verified
+            <CheckCircle2 className="h-4 w-4" /> {currentUser?.idVerified ? 'Student ID Verified' : 'Verification: Pending'}
           </div>
         </div>
 

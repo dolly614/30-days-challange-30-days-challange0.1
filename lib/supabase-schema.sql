@@ -14,10 +14,15 @@ CREATE TABLE public.users (
   school TEXT CHECK (school IS NULL OR (char_length(trim(school)) BETWEEN 2 AND 160)),
   city TEXT DEFAULT 'Jaipur',
   role TEXT NOT NULL DEFAULT 'student' CHECK (role IN ('student', 'teacher', 'admin')),
+  registration_id TEXT UNIQUE,
+  teacher_short_name TEXT,
   avatar TEXT,
   id_card_url TEXT,
+  id_card_name TEXT,
   id_verification_status TEXT NOT NULL DEFAULT 'pending' CHECK (id_verification_status IN ('pending', 'verified', 'rejected')),
   phone_verified BOOLEAN NOT NULL DEFAULT FALSE,
+  streak_reminders BOOLEAN NOT NULL DEFAULT TRUE,
+  onboarding_required BOOLEAN NOT NULL DEFAULT FALSE,
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'banned', 'suspended')),
   terms_accepted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -104,7 +109,10 @@ CREATE TABLE public.chapters (
   class INTEGER NOT NULL CHECK (class BETWEEN 1 AND 12),
   day INTEGER NOT NULL CHECK (day BETWEEN 1 AND 30),
   title TEXT NOT NULL,
+  summary TEXT,
   content TEXT NOT NULL,
+  key_takeaways JSONB DEFAULT '[]'::jsonb,
+  mcqs JSONB DEFAULT '[]'::jsonb,
   pdf_url TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(class, day)
@@ -116,6 +124,9 @@ CREATE TABLE public.daily_progress (
   user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
   day INTEGER NOT NULL CHECK (day BETWEEN 1 AND 30),
   score INTEGER NOT NULL CHECK (score BETWEEN 0 AND 5),
+  streak INTEGER NOT NULL DEFAULT 1 CHECK (streak >= 1),
+  answers JSONB NOT NULL DEFAULT '{}'::jsonb,
+  time_taken_seconds INTEGER DEFAULT 0,
   completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(user_id, day)
 );
@@ -154,10 +165,19 @@ CREATE TABLE public.payments (
 CREATE TABLE public.teachers (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID UNIQUE REFERENCES public.users(id) ON DELETE SET NULL ON UPDATE CASCADE,
+  name TEXT,
+  email TEXT,
   referral_code TEXT UNIQUE NOT NULL,
   tier TEXT NOT NULL DEFAULT 'Beginner Teacher' CHECK (tier IN ('Beginner Teacher', 'Active Mentor', 'Super Educator')),
   balance INTEGER NOT NULL DEFAULT 0 CHECK (balance >= 0),
   total_earned INTEGER NOT NULL DEFAULT 0 CHECK (total_earned >= 0),
+  this_month_earned INTEGER NOT NULL DEFAULT 0 CHECK (this_month_earned >= 0),
+  referred_count INTEGER NOT NULL DEFAULT 0 CHECK (referred_count >= 0),
+  pending_referrals INTEGER NOT NULL DEFAULT 0 CHECK (pending_referrals >= 0),
+  paid_active_count INTEGER NOT NULL DEFAULT 0 CHECK (paid_active_count >= 0),
+  risk_score INTEGER NOT NULL DEFAULT 0 CHECK (risk_score BETWEEN 0 AND 100),
+  upi_id TEXT,
+  bank_details TEXT,
   kyc_pan TEXT,
   kyc_verified BOOLEAN NOT NULL DEFAULT FALSE,
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
@@ -170,10 +190,13 @@ CREATE TABLE public.teachers (
 CREATE TABLE public.referrals (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   teacher_id UUID NOT NULL REFERENCES public.teachers(id) ON DELETE RESTRICT ON UPDATE CASCADE,
+  teacher_code TEXT,
   student_id UUID UNIQUE REFERENCES public.users(id) ON DELETE SET NULL ON UPDATE CASCADE,
+  student_name TEXT,
+  student_class INTEGER,
   anonymized_student_ref TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'verified', 'flagged_fraud')),
-  commission INTEGER NOT NULL DEFAULT 10 CHECK (commission >= 0),
+  commission INTEGER NOT NULL DEFAULT 250 CHECK (commission >= 0),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -181,12 +204,34 @@ CREATE TABLE public.referrals (
 CREATE TABLE public.withdrawals (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   teacher_id UUID NOT NULL REFERENCES public.teachers(id) ON DELETE RESTRICT ON UPDATE CASCADE,
+  teacher_name TEXT,
   amount INTEGER NOT NULL CHECK (amount >= 500),
   method TEXT NOT NULL CHECK (method IN ('UPI', 'Bank')),
-  upi_id TEXT NOT NULL,
+  upi_id TEXT,
+  destination TEXT NOT NULL,
+  invoice_id TEXT UNIQUE NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'paid', 'rejected')),
   version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 8B. LIVE LEADERBOARD CACHE TABLE (REAL-TIME RANKINGS & STATS)
+CREATE TABLE IF NOT EXISTS public.leaderboard_cache (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  student_id UUID REFERENCES public.users(id) ON DELETE CASCADE,
+  student_name TEXT NOT NULL,
+  class INTEGER NOT NULL CHECK (class BETWEEN 1 AND 12),
+  city TEXT NOT NULL DEFAULT 'Jaipur',
+  school TEXT DEFAULT 'Enrolled School',
+  score INTEGER NOT NULL DEFAULT 0 CHECK (score >= 0),
+  total INTEGER NOT NULL DEFAULT 30 CHECK (total > 0),
+  completed_days INTEGER NOT NULL DEFAULT 0,
+  current_streak INTEGER NOT NULL DEFAULT 0,
+  national_rank INTEGER NOT NULL DEFAULT 1,
+  prize_paid BOOLEAN NOT NULL DEFAULT FALSE,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'banned')),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(student_id)
 );
 
 -- 9. CERTIFICATES TABLE (PRESERVE CERTIFICATE VALIDITY ON ACCOUNT DELETION — SECTION 12 & 14)
@@ -1218,6 +1263,69 @@ VALUES
   ('mid', '15-Day Mid Challenge Exam', 'LIVE', 2700, 150, 150, 1, TRUE),
   ('final', '30-Day Grand Finale Exam', 'LIVE', 2700, 150, 150, 1, TRUE)
 ON CONFLICT (type) DO NOTHING;
+
+-- ============================================================================
+-- INITIAL SEED DATA FOR ALL PLATFORM FEATURES
+-- ============================================================================
+
+-- 1. Initial System Settings
+INSERT INTO public.settings (key, value, description)
+VALUES
+  ('exam_fee_inr', '199', 'Standard 30-Day Exam Fee in INR'),
+  ('mid_exam_fee_inr', '99', '15-Day Mid Challenge Exam Fee in INR'),
+  ('registration_open', 'true', 'Whether student registration is active'),
+  ('teacher_referral_reward_inr', '250', 'Commission per verified student referral in INR'),
+  ('support_helpline', '+91 1800-UYX-2026', 'Official support phone number'),
+  ('support_email', 'support@uyanix.in', 'Official support email address'),
+  ('anti_cheating_max_violations', '3', 'Maximum allowed tab switches before auto-submission')
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+
+-- 2. Initial Admin Bootstrap Account
+INSERT INTO public.users (id, name, email, role, phone_verified, status)
+VALUES 
+  ('a0000000-0000-0000-0000-000000000001', 'Uyanix System Administrator', 'admin@uyanix.in', 'admin', TRUE, 'active')
+ON CONFLICT (id) DO NOTHING;
+
+-- 3. Initial Approved Teacher Mentor (TEACHER10)
+INSERT INTO public.users (id, name, email, phone, role, phone_verified, status)
+VALUES 
+  ('b0000000-0000-0000-0000-000000000001', 'Priya Sharma (Mathematics Mentor)', 'teacher.priya@uyanix.in', '9820012345', 'teacher', TRUE, 'active')
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.teachers (user_id, name, email, referral_code, tier, balance, total_earned, this_month_earned, referred_count, paid_active_count, upi_id, status, kyc_verified, kyc_pan)
+VALUES 
+  ('b0000000-0000-0000-0000-000000000001', 'Priya Sharma (Mathematics Mentor)', 'teacher.priya@uyanix.in', 'TEACHER10', 'Active Mentor', 1500, 4500, 1500, 18, 16, 'priyateacher@upi', 'approved', TRUE, 'ABCPS1234F')
+ON CONFLICT (referral_code) DO NOTHING;
+
+-- 4. Initial Top National Leaderboard Students
+INSERT INTO public.users (id, name, class, school, city, role, registration_id, status, id_verification_status)
+VALUES 
+  ('c0000000-0000-0000-0000-000000000001', 'Aarav Sharma', 8, 'Dhirubhai Ambani International', 'Mumbai', 'student', 'OEC2609001', 'active', 'verified'),
+  ('c0000000-0000-0000-0000-000000000002', 'Diya Patel', 7, 'Udgam School for Children', 'Ahmedabad', 'student', 'OEC2609002', 'active', 'verified'),
+  ('c0000000-0000-0000-0000-000000000003', 'Vihaan Singh', 9, 'Delhi Public School RK Puram', 'Delhi', 'student', 'OEC2609003', 'active', 'verified'),
+  ('c0000000-0000-0000-0000-000000000004', 'Ananya Iyer', 6, 'PSBB Senior Secondary', 'Chennai', 'student', 'OEC2609004', 'active', 'verified'),
+  ('c0000000-0000-0000-0000-000000000005', 'Arjun Reddy', 10, 'Oakridge International', 'Hyderabad', 'student', 'OEC2609005', 'active', 'verified')
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.leaderboard_cache (student_id, student_name, class, city, school, score, total, completed_days, current_streak, national_rank, prize_paid, status)
+VALUES
+  ('c0000000-0000-0000-0000-000000000001', 'Aarav Sharma', 8, 'Mumbai', 'Dhirubhai Ambani International', 30, 30, 30, 30, 1, TRUE, 'active'),
+  ('c0000000-0000-0000-0000-000000000002', 'Diya Patel', 7, 'Ahmedabad', 'Udgam School for Children', 29, 30, 29, 29, 2, TRUE, 'active'),
+  ('c0000000-0000-0000-0000-000000000003', 'Vihaan Singh', 9, 'Delhi', 'Delhi Public School RK Puram', 29, 30, 29, 29, 3, TRUE, 'active'),
+  ('c0000000-0000-0000-0000-000000000004', 'Ananya Iyer', 6, 'Chennai', 'PSBB Senior Secondary', 28, 30, 28, 28, 4, FALSE, 'active'),
+  ('c0000000-0000-0000-0000-000000000005', 'Arjun Reddy', 10, 'Hyderabad', 'Oakridge International', 28, 30, 28, 28, 5, FALSE, 'active')
+ON CONFLICT (student_id) DO UPDATE SET score = EXCLUDED.score, national_rank = EXCLUDED.national_rank;
+
+-- 5. Sample Core Curriculum Chapters (Class 10 - Days 1 to 5)
+INSERT INTO public.chapters (class, day, title, summary, content, key_takeaways, mcqs)
+VALUES
+  (10, 1, 'Chemical Reactions & Equations', 'Basics of balancing chemical equations and types of chemical reactions.', 'Chemical reactions involve transformation of reactant substances into products. Law of Conservation of Mass dictates that mass in an isolated system can neither be created nor destroyed.', '["Law of conservation of mass","Balancing coefficients","Endothermic vs exothermic reactions"]'::jsonb, '[{"id":"q10-1-1","question":"Which of the following is an example of an exothermic reaction?","options":["Respiration","Photosynthesis","Melting of ice","Electrolysis of water"],"correctIndex":0,"explanation":"Respiration releases energy in the form of ATP, making it exothermic."}]'::jsonb),
+  (10, 2, 'Acids, Bases & Salts', 'Understanding pH scale, indicators, and salt formations in nature.', 'Acids produce hydrogen ions (H+) in aqueous solutions, whereas bases produce hydroxide ions (OH-). The pH scale measures hydrogen ion concentration from 0 (strong acid) to 14 (strong base).', '["pH scale range 0-14","Litmus paper color transitions","Neutralization reaction products"]'::jsonb, '[{"id":"q10-2-1","question":"What is the pH of pure water at 25°C?","options":["0","7","14","1"],"correctIndex":1,"explanation":"Pure water is neutral with a pH value of 7."}]'::jsonb),
+  (10, 3, 'Electricity & Ohm''s Law', 'Electric current, potential difference, and resistance calculations.', 'Ohm''s law states that current (I) through a conductor between two points is directly proportional to voltage (V) across the two points, provided physical conditions remain constant: V = I * R.', '["V = I * R formula","SI unit of resistance is Ohm","Series vs Parallel circuit characteristics"]'::jsonb, '[{"id":"q10-3-1","question":"What is the SI unit of electric current?","options":["Volt","Ohm","Ampere","Joule"],"correctIndex":2,"explanation":"Electric current is measured in Amperes (A)."}]'::jsonb),
+  (10, 4, 'Life Processes: Nutrition', 'Autotrophic vs Heterotrophic modes of nutrition and human digestion.', 'Nutrition is the biological process by which organisms obtain energy and nutrients from food substances for growth, maintenance, and repair.', '["Chlorophyll role in photosynthesis","Enzymatic breakdown of carbohydrates","Small intestine absorption"]'::jsonb, '[{"id":"q10-4-1","question":"Where does complete digestion of food occur in human body?","options":["Stomach","Small intestine","Large intestine","Mouth"],"correctIndex":1,"explanation":"Complete digestion and absorption of nutrients occurs in the small intestine."}]'::jsonb),
+  (10, 5, 'Light: Reflection & Refraction', 'Mirrors, lenses, focal length, and refractive index principles.', 'Light travels in straight lines in a uniform medium. Spherical mirrors follow the mirror formula 1/f = 1/v + 1/u with sign convention.', '["Mirror formula 1/f = 1/v + 1/u","Snell''s law of refraction","Convex vs Concave lens image formation"]'::jsonb, '[{"id":"q10-5-1","question":"A convex mirror always forms an image that is:","options":["Real and inverted","Virtual, erect and diminished","Real and magnified","Virtual and inverted"],"correctIndex":1,"explanation":"Convex mirrors always form virtual, erect, and diminished images."}]'::jsonb)
+ON CONFLICT (class, day) DO UPDATE SET title = EXCLUDED.title, summary = EXCLUDED.summary;
+
 
 
 

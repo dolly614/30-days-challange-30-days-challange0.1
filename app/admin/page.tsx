@@ -46,6 +46,11 @@ const GoogleSheetsHub = dynamic(() =>
     (mod) => mod.GoogleSheetsHub
   )
 );
+const DatabaseControlPanel = dynamic(() =>
+  import('@/components/admin/DatabaseControlPanel').then(
+    (mod) => mod.DatabaseControlPanel
+  )
+);
 
 interface AdminMetricsState {
   totalRegistrations: number;
@@ -352,6 +357,9 @@ export default function AdminDashboardPage() {
             </table>
           </div>
         </div>
+
+        {/* Full Database Engine & Schemas Control Panel */}
+        <DatabaseControlPanel />
 
         {/* Google Sheets & Drive Live Sync Hub */}
         <div className="mt-8">

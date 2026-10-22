@@ -66,15 +66,15 @@ export default function ContactSupportPage() {
               <Mail className="h-5 w-5 text-primary" />
               <div className="mt-2 text-sm font-bold">Email Support</div>
               <p className="mt-1 text-xs text-muted-foreground">
-                dollysingh1268@gmail.com
+                support@uyanix.in
               </p>
             </div>
 
             <div className="rounded-3xl border border-border bg-card p-5 shadow-card">
               <Phone className="h-5 w-5 text-secondary" />
-              <div className="mt-2 text-sm font-bold">Helpline &amp; WhatsApp</div>
+              <div className="mt-2 text-sm font-bold">Helpline &amp; Support</div>
               <p className="mt-1 text-xs text-muted-foreground">
-                +91 90000 12345 (9 AM – 9 PM IST)
+                +91 1800-UYX-2026 (9 AM – 9 PM IST)
               </p>
             </div>
           </div>

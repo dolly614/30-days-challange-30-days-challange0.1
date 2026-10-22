@@ -386,7 +386,7 @@ function ExamPortalContent() {
           <div className="mt-6 rounded-2xl border border-border bg-muted/40 p-4 space-y-2 text-sm">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Student Name</span>
-              <span className="font-semibold">{currentUser?.name || 'dollysingh'} (Class {currentUser?.classNum || 12})</span>
+              <span className="font-semibold">{currentUser?.name || 'Student'} (Class {currentUser?.classNum || 10})</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Exam Format</span>
@@ -459,7 +459,7 @@ function ExamPortalContent() {
 
           <div className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-6">
             <div className="text-xs text-muted-foreground">
-              Candidate: <b>{currentUser?.name || 'dollysingh'}</b> (Class {currentUser?.classNum || 12})
+              Candidate: <b>{currentUser?.name || 'Student'}</b> (Class {currentUser?.classNum || 10})
             </div>
             <button
               type="button"
@@ -479,7 +479,7 @@ function ExamPortalContent() {
           <div className="flex flex-wrap items-center justify-between gap-4 rounded-3xl border border-border bg-card p-4 shadow-card sm:p-5">
             <div>
               <span className="text-xs font-semibold text-muted-foreground">
-                Candidate: {currentUser?.name || 'dollysingh'} (Class {currentUser?.classNum || 12})
+                Candidate: {currentUser?.name || 'Student'} (Class {currentUser?.classNum || 10})
               </span>
               <h2 className="text-lg font-bold">
                 {examType === 'final' ? '30-Day Grand Final Exam' : '15-Day Mid Challenge'}
@@ -676,7 +676,7 @@ function ExamPortalContent() {
             </span>
 
             <h1 className="mt-3 text-3xl font-extrabold sm:text-4xl animate-pop-in">
-              Congratulations, {currentUser?.name || 'dollysingh'}! 🎉
+              Congratulations, {currentUser?.name || 'Student'}! 🎉
             </h1>
             <p className="mt-2 text-sm opacity-90">
               Aapka official {examType === 'final' ? '30-Day Grand Finale Exam' : '15-Day Mid Challenge Exam'} safalta-poorvak evaluate ho gaya hai.

@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
-  authoritativeAssignStudentRoleAfterVerification,
   enforceRateLimit,
   getClientIp,
   requireAuthenticatedUser,
   requireOwnershipOrAdmin,
-  setSessionCookie,
 } from '@/lib/server-auth';
 import {
   authorizeFileDownloadAndGenerateSignedUrl,
@@ -175,31 +173,31 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // Authoritatively assign 'student' role and verified status on server
-      const assignRes = authoritativeAssignStudentRoleAfterVerification(
-        guard.user.id,
-        documentName.trim()
-      );
+      // Keep verification status as 'pending' awaiting Admin review from Admin console
+      const pendingProfile = {
+        ...guard.user,
+        idCardUrl: uploadResult.fileRecord.file_id,
+        idCardName: documentName.trim(),
+        idVerificationStatus: 'pending',
+        idVerified: false,
+      };
 
       const res = NextResponse.json(
         {
           valid: true,
-          verificationStatus: 'verified',
+          verificationStatus: 'pending',
           fileId: uploadResult.fileRecord.file_id,
           purpose: uploadResult.fileRecord.purpose,
           bucket: uploadResult.fileRecord.bucket,
           visibility: uploadResult.fileRecord.visibility,
           checkedAt: uploadResult.fileRecord.created_at,
-          user: assignRes.ok ? assignRes.user : undefined,
-          token: assignRes.ok ? assignRes.token : undefined,
-          role: assignRes.ok ? assignRes.user.role : 'student',
+          message:
+            'Document uploaded successfully. Your verification status is pending and awaits Admin review.',
+          user: pendingProfile,
+          role: guard.user.role || 'student',
         },
         { status: 201 }
       );
-
-      if (assignRes.ok && assignRes.token) {
-        setSessionCookie(res, assignRes.token);
-      }
 
       return res;
     }

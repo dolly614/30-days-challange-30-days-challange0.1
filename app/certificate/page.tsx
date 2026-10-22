@@ -15,7 +15,13 @@ import confetti from 'canvas-confetti';
 export default function CertificatePage() {
   const router = useRouter();
   const { currentUser, completedDays, examAttempts, syncServerSession } = useUyanixStore();
-  const [customName, setCustomName] = useState(currentUser?.name || 'dollysingh');
+  const [customName, setCustomName] = useState(currentUser?.name || 'Student Champion');
+
+  useEffect(() => {
+    if (currentUser?.name) {
+      setCustomName(currentUser.name);
+    }
+  }, [currentUser]);
 
   useEffect(() => {
     try {
@@ -43,22 +49,30 @@ export default function CertificatePage() {
   }, [syncServerSession, router]);
 
   const latestAttempt = examAttempts[0];
-  const [serverCertId, setServerCertId] = useState<string>('UYX-CERT-A9F48E2C1B7D03E6');
-  const [serverQrUrl, setServerQrUrl] = useState<string>(
-    buildCanonicalCertificatePublicVerificationUrl('UYX-CERT-A9F48E2C1B7D03E6')
-  );
+  const [serverCertId, setServerCertId] = useState<string>('');
+  const [serverQrUrl, setServerQrUrl] = useState<string>('');
   const [serverRecipientName, setServerRecipientName] = useState<string>('');
   const [serverScore, setServerScore] = useState<number | null>(null);
   const [serverRank, setServerRank] = useState<number | null>(null);
+  const [noCertFound, setNoCertFound] = useState<boolean>(false);
+  const [certLoading, setCertLoading] = useState<boolean>(true);
 
   useEffect(() => {
     let active = true;
+    setCertLoading(true);
     fetch('/api/certificate', { credentials: 'include' })
-      .then((r) => (r.ok ? r.json() : null))
+      .then(async (r) => {
+        if (!r.ok) {
+          if (active) setNoCertFound(true);
+          return null;
+        }
+        return r.json();
+      })
       .then((data) => {
         if (active && data?.publicCertificateId && data?.qrVerificationUrl) {
           setServerCertId(data.publicCertificateId);
           setServerQrUrl(data.qrVerificationUrl);
+          setNoCertFound(false);
           if (data.recipientName) {
             setServerRecipientName(data.recipientName);
             setCustomName(data.recipientName);
@@ -69,17 +83,28 @@ export default function CertificatePage() {
           if (typeof data.rankSnapshot === 'number') {
             setServerRank(data.rankSnapshot);
           }
+        } else if (active && !data) {
+          setNoCertFound(true);
         }
       })
-      .catch(() => {});
+      .catch(() => {
+        if (active) setNoCertFound(true);
+      })
+      .finally(() => {
+        if (active) setCertLoading(false);
+      });
     return () => {
       active = false;
     };
   }, []);
 
-  const certId = serverCertId;
+  const certId = serverCertId || (certLoading ? 'Loading...' : 'NOT_ISSUED');
 
   const handlePrintPdf = () => {
+    if (!serverCertId) {
+      toast.error('Certificate has not been issued yet. Complete an evaluated exam to claim your certificate.');
+      return;
+    }
     toast.success('Opening Certificate PDF Print Dialog...');
     window.print();
   };
@@ -106,22 +131,46 @@ export default function CertificatePage() {
             <button
               type="button"
               onClick={handlePrintPdf}
-              className="inline-flex h-11 items-center gap-2 rounded-full bg-gradient-hero px-6 text-xs font-semibold text-primary-foreground shadow-soft transition hover:scale-[1.02]"
+              disabled={noCertFound || !serverCertId}
+              className="inline-flex h-11 items-center gap-2 rounded-full bg-gradient-hero px-6 text-xs font-semibold text-primary-foreground shadow-soft transition hover:scale-[1.02] disabled:opacity-50 disabled:pointer-events-none"
             >
               <Download className="h-4 w-4" /> Download PDF / Print
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                navigator.clipboard.writeText(serverQrUrl);
-                toast.success('Certificate verification link copied!');
-              }}
-              className="inline-flex h-11 items-center gap-2 rounded-full border border-border bg-card px-4 text-xs font-semibold hover:bg-accent"
-            >
-              <Share2 className="h-4 w-4" /> Share Link
-            </button>
+            {serverQrUrl && (
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(serverQrUrl);
+                  toast.success('Certificate verification link copied!');
+                }}
+                className="inline-flex h-11 items-center gap-2 rounded-full border border-border bg-card px-4 text-xs font-semibold hover:bg-accent"
+              >
+                <Share2 className="h-4 w-4" /> Share Link
+              </button>
+            )}
           </div>
         </div>
+
+        {noCertFound && (
+          <div className="mt-6 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-5 text-amber-700 dark:text-amber-400">
+            <div className="flex items-center gap-2 font-bold text-sm">
+              <ShieldCheck className="h-5 w-5" />
+              Exam Completion Required
+            </div>
+            <p className="mt-1 text-xs leading-relaxed">
+              No completed exam found. You must complete and evaluate your 30-Day Challenge or Mid-Term Exam before claiming a certificate.
+            </p>
+            <div className="mt-3">
+              <button
+                type="button"
+                onClick={() => router.push('/exam')}
+                className="inline-flex items-center gap-1.5 rounded-full bg-primary px-4 py-1.5 text-xs font-semibold text-primary-foreground hover:bg-primary/90"
+              >
+                Go to Exam Portal →
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Name customizer bar */}
         <div className="mt-6 flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-card p-4 shadow-card">
@@ -170,11 +219,11 @@ export default function CertificatePage() {
             <div className="mx-auto mt-3 h-1 w-40 rounded-full bg-gradient-india" />
 
             <p className="mx-auto mt-5 max-w-xl text-sm leading-relaxed text-muted-foreground">
-              from <b className="text-foreground">{currentUser?.school || 'Delhi Public School'}</b> (Class{' '}
-              <b className="text-foreground">{currentUser?.classNum || 12}</b>) for successfully completing{' '}
+              from <b className="text-foreground">{currentUser?.school || 'Enrolled School'}</b> (Class{' '}
+              <b className="text-foreground">{currentUser?.classNum || 10}</b>) for successfully completing{' '}
               <b className="text-secondary">{completedDays.length} Days</b> of consistent daily learning and achieving{' '}
               <b className="text-primary">
-                Rank #{serverRank ?? (latestAttempt?.rank || 4)}
+                Rank #{serverRank ?? latestAttempt?.rank ?? 1}
               </b>{' '}
               in the Uyanix 30 Days Challenge 2026.
             </p>
@@ -190,10 +239,16 @@ export default function CertificatePage() {
 
               <div className="flex flex-col items-center">
                 <div className="rounded-xl border border-border bg-white p-2 shadow-sm">
-                  <QRCodeSVG
-                    value={serverQrUrl}
-                    size={68}
-                  />
+                  {serverQrUrl ? (
+                    <QRCodeSVG
+                      value={serverQrUrl}
+                      size={68}
+                    />
+                  ) : (
+                    <div className="h-[68px] w-[68px] flex items-center justify-center text-[10px] text-muted-foreground border border-dashed rounded">
+                      Pending
+                    </div>
+                  )}
                 </div>
                 <span className="mt-1 text-[10px] text-muted-foreground">Scan to Verify</span>
               </div>

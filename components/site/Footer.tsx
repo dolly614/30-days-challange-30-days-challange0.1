@@ -86,10 +86,10 @@ export function Footer() {
           <h4 className="mb-3 text-sm font-semibold">Contact &amp; Legal</h4>
           <ul className="space-y-2 text-sm text-muted-foreground">
             <li className="flex items-center gap-2">
-              <Mail className="h-4 w-4 shrink-0" aria-hidden="true" /> dollysingh1268@gmail.com
+              <Mail className="h-4 w-4 shrink-0" aria-hidden="true" /> support@uyanix.in
             </li>
             <li className="flex items-center gap-2">
-              <Phone className="h-4 w-4 shrink-0" aria-hidden="true" /> +91 90000 12345
+              <Phone className="h-4 w-4 shrink-0" aria-hidden="true" /> +91 1800-UYX-2026
             </li>
             <li className="pt-1">
               <Link href="/terms" className="text-xs hover:text-foreground underline-offset-4 hover:underline">

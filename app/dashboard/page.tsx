@@ -97,14 +97,14 @@ export default function DashboardPage() {
     }
   };
 
-  const userClass = currentUser?.classNum || 12;
-  const userName = currentUser?.name || 'dollysingh';
+  const userClass = currentUser?.classNum || 10;
+  const userName = currentUser?.name || 'Student';
   const topics = getTopicsForClass(userClass);
 
   const completedCount = completedDays.length;
   const progressPercent = Math.round((completedCount / 30) * 100);
   const nextDay = Math.min(30, completedCount + 1);
-  const nextTopicTitle = topics[nextDay - 1] || 'Globalization';
+  const nextTopicTitle = topics[nextDay - 1] || 'Today’s Topic';
 
   const matchingDays = topics
     .map((title, idx) => ({ day: idx + 1, title }))
@@ -138,7 +138,7 @@ export default function DashboardPage() {
                   </h2>
                   <p className="mt-0.5 text-xs text-muted-foreground leading-relaxed">
                     {accessError === 'admin_only'
-                      ? 'Aapne Admin Console access karne ki koshish ki. Yeh section sirf authorized administrators (jaise dollysingh1268@gmail.com) ke liye reserved hai.'
+                      ? 'Aapne Admin Console access karne ki koshish ki. Yeh section sirf authorized administrators ke liye reserved hai.'
                       : accessError === 'teacher_only'
                       ? 'Yeh section sirf registered teachers & educators ke liye available hai.'
                       : 'Aapke account ke paas is page ko view karne ki permission nahi hai.'}

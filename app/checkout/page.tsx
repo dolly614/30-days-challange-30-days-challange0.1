@@ -68,11 +68,10 @@ export default function RazorpayCheckoutDemoPage() {
               </p>
 
               {/* Preset buttons */}
-              <div className="mt-4 grid grid-cols-3 gap-2.5">
+              <div className="mt-4 grid grid-cols-2 gap-2.5">
                 {[
-                  { label: '₹1 (Test Min)', paise: 100, rs: '1' },
-                  { label: '₹10', paise: 1000, rs: '10' },
-                  { label: '₹199 (Exam Fee)', paise: 19900, rs: '199' },
+                  { label: '₹199 (Standard Exam Fee)', paise: 19900, rs: '199' },
+                  { label: '₹99 (Mid-Term Exam Fee)', paise: 9900, rs: '99' },
                 ].map((preset) => (
                   <button
                     key={preset.paise}
@@ -265,7 +264,7 @@ export default function RazorpayCheckoutDemoPage() {
               </div>
               <div className="flex items-center gap-2 text-[11px]">
                 <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
-                <span>1. POST /api/create-order (amount &ge; 100 paise)</span>
+                <span>1. POST /api/create-order (server-validated pricing ₹199 / ₹99)</span>
               </div>
               <div className="flex items-center gap-2 text-[11px]">
                 <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />

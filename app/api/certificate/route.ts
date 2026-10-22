@@ -12,7 +12,6 @@ import {
   revokeAuthoritativeCertificate,
   verifyCertificatePublicly,
 } from '@/lib/certificate-security-governance';
-import { grantServerExamPaymentEntitlement } from '@/lib/exam-engine-governance';
 import { authoritativeVerifyCertificate } from '@/lib/exam-authoritative-service';
 import { getSupabaseAdminClient } from '@/lib/supabase-server';
 
@@ -122,58 +121,83 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // Default GET for authenticated student: issue or retrieve their authoritative certificate
-  grantServerExamPaymentEntitlement(auth.user.id, 'mid');
-  const issued = issueOrRetrieveAuthoritativeCertificate({
-    actorId: auth.user.id,
-    actorRole: auth.user.role,
-    accountStatus: 'active',
-    authoritativeResult: {
-      result_id: `RES-AUTH-${auth.user.id}`,
-      attempt_id: `ATT-AUTH-${auth.user.id}`,
-      exam_id: 'EXAM-UYANIX-2026-MID',
-      exam_type: 'mid',
-      student_id: auth.user.id,
-      student_name: auth.user.name || 'Student Champion',
-      student_school: auth.user.school || 'Delhi Public School',
-      student_class: auth.user.classNum || 12,
-      completed_days: 30,
-      score: 142,
-      maximum_score: 150,
-      percentage: 95,
-      rank: 4,
-      attempt_status: 'EVALUATED',
-      result_valid: true,
-      requires_payment: true,
-      finalized_at: new Date().toISOString(),
-    },
-    untrustedRequestHostHeader: req.headers.get('host'),
-    requestId: req.headers.get('x-request-id') || undefined,
-  });
+  // Query Supabase PostgreSQL for actual evaluated exam attempts
+  if (supabase) {
+    try {
+      const { data: dbAttempt } = await supabase
+        .from('exam_attempts')
+        .select('*')
+        .or(`student_id.eq.${auth.user.id},user_id.eq.${auth.user.id}`)
+        .in('status', ['EVALUATED', 'completed', 'AUTO_SUBMITTED'])
+        .order('finalized_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-  if (!issued.ok) {
-    return NextResponse.json(
-      { error: issued.reason, errorCode: issued.errorCode },
-      { status: issued.httpStatus }
-    );
+      if (
+        dbAttempt &&
+        (dbAttempt.certificate_eligible || (dbAttempt.percentage ?? 0) >= 40)
+      ) {
+        const issued = issueOrRetrieveAuthoritativeCertificate({
+          actorId: auth.user.id,
+          actorRole: auth.user.role,
+          accountStatus: 'active',
+          authoritativeResult: {
+            result_id: `RES-AUTH-${dbAttempt.id || auth.user.id}`,
+            attempt_id: dbAttempt.id || `ATT-AUTH-${auth.user.id}`,
+            exam_id: dbAttempt.exam_id || 'EXAM-UYANIX-2026',
+            exam_type: dbAttempt.exam_type || 'mid',
+            student_id: auth.user.id,
+            student_name: auth.user.name || 'Student Champion',
+            student_school: auth.user.school || 'Enrolled School',
+            student_class: auth.user.classNum || dbAttempt.student_class || 10,
+            completed_days: 30,
+            score: dbAttempt.score,
+            maximum_score: dbAttempt.maximum_score || 150,
+            percentage: dbAttempt.percentage,
+            rank: dbAttempt.rank || 1,
+            attempt_status: 'EVALUATED',
+            result_valid: true,
+            requires_payment: false,
+            finalized_at: dbAttempt.finalized_at || new Date().toISOString(),
+          },
+          untrustedRequestHostHeader: req.headers.get('host'),
+          requestId: req.headers.get('x-request-id') || undefined,
+        });
+
+        if (issued.ok) {
+          return NextResponse.json(
+            {
+              ok: true,
+              publicCertificateId: issued.certificate.public_certificate_id,
+              qrVerificationUrl: issued.certificate.qr_verification_url,
+              status: issued.certificate.status,
+              issueDate: issued.certificate.issue_date,
+              scoreSnapshot: issued.certificate.score_snapshot,
+              rankSnapshot: issued.certificate.rank_snapshot,
+              recipientName: issued.certificate.recipient_name_snapshot,
+              verificationVersion: issued.certificate.verification_version,
+            },
+            {
+              status: 200,
+              headers: { 'Cache-Control': 'private, no-store' },
+            }
+          );
+        }
+      }
+    } catch {
+      // non-blocking fallback
+    }
   }
 
+  // Only issue certificates if student has completed and evaluated an exam
   return NextResponse.json(
     {
-      ok: true,
-      publicCertificateId: issued.certificate.public_certificate_id,
-      qrVerificationUrl: issued.certificate.qr_verification_url,
-      status: issued.certificate.status,
-      issueDate: issued.certificate.issue_date,
-      scoreSnapshot: issued.certificate.score_snapshot,
-      rankSnapshot: issued.certificate.rank_snapshot,
-      recipientName: issued.certificate.recipient_name_snapshot,
-      verificationVersion: issued.certificate.verification_version,
+      ok: false,
+      error:
+        'No completed exam found. You must complete and evaluate your 30-Day Challenge or Mid-Term Exam before claiming a certificate.',
+      errorCode: 'NO_EVALUATED_EXAM',
     },
-    {
-      status: 200,
-      headers: { 'Cache-Control': 'private, no-store' },
-    }
+    { status: 404 }
   );
 }
 

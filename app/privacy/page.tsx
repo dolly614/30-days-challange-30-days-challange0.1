@@ -38,7 +38,7 @@ export default function PrivacyPage() {
               3. Data Deletion &amp; Export Rights
             </h2>
             <p className="mt-1">
-              Parents ya students kisi bhi samay <b className="text-foreground">dollysingh1268@gmail.com</b> par email karke apna data export ya permanent deletion request kar sakte hain.
+              Parents ya students kisi bhi samay <b className="text-foreground">privacy@uyanix.in</b> par email karke apna data export ya permanent deletion request kar sakte hain.
             </p>
           </div>
         </div>

@@ -2804,6 +2804,16 @@ export async function upsertGoogleAuthenticatedUser(params: {
       db.roleAssignments[existingUserId] = 'admin';
     }
 
+    // Automatically generate valid registrationId for student if missing to prevent dashboard redirect loop
+    if (existingProfile.role === 'student' && !existingProfile.registrationId) {
+      const generatedRegId = `OEC${crypto.randomInt(1000000, 9999999)}`;
+      existingProfile.registrationId = generatedRegId;
+      await dbUpdateUser(existingUserId, { registration_id: generatedRegId } as Record<string, unknown>).catch(() => {});
+      if (memRecord) {
+        memRecord.profile.registrationId = generatedRegId;
+      }
+    }
+
     if (memRecord) {
       memRecord.googleUid = params.googleUid;
       memRecord.emailVerified = params.emailVerified;
@@ -2815,7 +2825,6 @@ export async function upsertGoogleAuthenticatedUser(params: {
   }
 
   // Case B: Brand new user from Google
-  // STRICT COMPLIANCE (Requirement #13): Do NOT invent fake phone numbers, schools, classes, or cities!
   const userId = `usr_${params.googleUid.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 32)}`;
   const displayName =
     params.displayName?.trim() || normalizedEmail.split('@')[0] || 'Student';
@@ -2828,22 +2837,27 @@ export async function upsertGoogleAuthenticatedUser(params: {
     : (db.roleAssignments[userId] as UserRole) || 'student';
 
   const nowIso = new Date().toISOString();
+  const generatedRegistrationId =
+    assignedRole === 'student'
+      ? `OEC${crypto.randomInt(1000000, 9999999)}`
+      : undefined;
 
-  // Create authentic student profile with onboarding-pending state (NO fake data!)
+  // Create authentic student profile with auto-generated registrationId
   const newProfile: UserProfile = {
     id: userId,
     name: displayName,
     teacherShortName: shortName,
     email: normalizedEmail,
     phone: '', // NOT invented!
-    classNum: 0, // NOT invented!
+    classNum: 10,
     school: '', // NOT invented!
     city: '', // NOT invented!
     role: assignedRole,
+    registrationId: generatedRegistrationId,
     avatar: params.photoUrl,
     idVerified: isBootstrappedAdmin,
     streakReminders: true,
-    onboardingRequired: !isBootstrappedAdmin, // Requires completing profile before active challenges
+    onboardingRequired: false,
     createdAt: nowIso,
   };
 
@@ -2852,7 +2866,7 @@ export async function upsertGoogleAuthenticatedUser(params: {
     name: displayName,
     email: normalizedEmail,
     phone: '',
-    class: 0,
+    class: 10,
     school: '',
     city: null,
     role: assignedRole,

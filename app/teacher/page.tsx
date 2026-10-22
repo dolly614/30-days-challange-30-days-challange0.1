@@ -67,14 +67,14 @@ export default function TeacherPortalPage() {
   const teacher = teachers[0];
   const [payoutMethod, setPayoutMethod] = useState<'UPI' | 'Bank'>('UPI');
   const [destination, setDestination] = useState(
-    teacher?.upiId || 'shiv9897320579@gmail.com'
+    teacher?.upiId || ''
   );
   const [amount, setAmount] = useState(500);
   const [showKycModal, setShowKycModal] = useState(false);
-  const [panInput, setPanInput] = useState(teacher?.kycPan || 'ABCDE1234F');
+  const [panInput, setPanInput] = useState(teacher?.kycPan || '');
 
   const referralUrl = buildCanonicalTeacherReferralUrl(
-    teacher?.code || 'DOLLOXW0'
+    teacher?.code || 'TEACHER10'
   );
 
   const conversionRate =
@@ -146,17 +146,17 @@ export default function TeacherPortalPage() {
                     : 'bg-amber-500/15 text-amber-600'
                 }`}
               >
-                Status: {teacher?.status || 'rejected'}
+                Status: {teacher?.status || 'pending'}
               </span>
             </div>
 
             <h1 className="mt-2 text-3xl font-extrabold sm:text-4xl">
-              Hi, {teacher?.name || 'dolly'} 👋
+              Hi, {teacher?.name || 'Educator'} 👋
             </h1>
             <p className="text-sm text-muted-foreground">
               Aapka referral code:{' '}
               <span className="font-mono font-semibold text-foreground">
-                {teacher?.code || 'DOLLOXW0'}
+                {teacher?.code || 'TEACHER10'}
               </span>
             </p>
           </div>
@@ -290,7 +290,7 @@ export default function TeacherPortalPage() {
                 target="_blank"
                 rel="noreferrer"
                 href={`https://wa.me/?text=${encodeURIComponent(
-                  `Join Uyanix 30 Days Challenge with my code ${teacher?.code || 'DOLLOXW0'} → ${referralUrl}`
+                  `Join Uyanix 30 Days Challenge with my code ${teacher?.code || 'TEACHER10'} → ${referralUrl}`
                 )}`}
                 className="rounded-lg border border-border py-2 text-center hover:bg-accent"
               >
@@ -302,7 +302,7 @@ export default function TeacherPortalPage() {
                 href={`https://t.me/share/url?url=${encodeURIComponent(
                   referralUrl
                 )}&text=${encodeURIComponent(
-                  `Join Uyanix 30 Days Challenge with my code ${teacher?.code || 'DOLLOXW0'} → ${referralUrl}`
+                  `Join Uyanix 30 Days Challenge with my code ${teacher?.code || 'TEACHER10'} → ${referralUrl}`
                 )}`}
                 className="rounded-lg border border-border py-2 text-center hover:bg-accent"
               >

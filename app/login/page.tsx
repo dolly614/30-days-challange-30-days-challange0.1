@@ -261,7 +261,7 @@ export default function LoginPage() {
                     required
                     value={identifier}
                     onChange={(e) => setIdentifier(e.target.value)}
-                    placeholder="dollysingh1268@gmail.com"
+                    placeholder="student@example.com or 9876543210"
                     className="h-11 w-full rounded-xl border border-input bg-background pl-10 pr-4 text-sm outline-none focus:border-primary"
                   />
                 </div>
