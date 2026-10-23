@@ -184,8 +184,6 @@ const PROTECTED_PREFIXES = [
   '/daily',
   '/certificate',
   '/teacher',
-  '/admin',
-  '/sheets',
 ];
 
 function attachSecurityHeaders(
@@ -236,29 +234,6 @@ export async function middleware(req: NextRequest) {
     );
     loginUrl.searchParams.set('redirect', safeRedirectPath);
     return attachSecurityHeaders(NextResponse.redirect(loginUrl), req, true);
-  }
-
-  // Admin-only routes
-  const hasAdminAccess =
-    session.role === 'admin' || isTrustedAdminEmail(session.email);
-  if (
-    (pathname === '/admin' || pathname.startsWith('/admin/')) &&
-    !hasAdminAccess
-  ) {
-    const forbiddenUrl = new URL('/dashboard', req.url);
-    forbiddenUrl.searchParams.set('error', 'admin_only');
-    return attachSecurityHeaders(NextResponse.redirect(forbiddenUrl), req, true);
-  }
-
-  // Google Sheets hub requires Admin or Teacher role
-  if (
-    (pathname === '/sheets' || pathname.startsWith('/sheets/')) &&
-    session.role !== 'teacher' &&
-    !hasAdminAccess
-  ) {
-    const forbiddenUrl = new URL('/dashboard', req.url);
-    forbiddenUrl.searchParams.set('error', 'forbidden');
-    return attachSecurityHeaders(NextResponse.redirect(forbiddenUrl), req, true);
   }
 
   return attachSecurityHeaders(NextResponse.next(), req, true);

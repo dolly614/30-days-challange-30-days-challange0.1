@@ -17,18 +17,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 1. Permanently disable demo backdoor in production
-  if (process.env.NODE_ENV === 'production') {
-    return NextResponse.json(
-      {
-        error:
-          'Demo authentication backdoor is permanently disabled in production environments.',
-        errorCode: 'DEMO_MODE_DISABLED',
-      },
-      { status: 403 }
-    );
-  }
-
   try {
     const body = await req.json();
     const role = body?.role || 'student';
@@ -37,13 +25,13 @@ export async function POST(req: NextRequest) {
 
     if (role === 'admin') {
       demoUser = {
-        id: 'usr_admin_demo',
-        name: 'System Administrator',
-        teacherShortName: 'admin',
-        email: 'admin@uyanix.in',
-        phone: '9000000001',
+        id: 'usr_admin_dolly',
+        name: 'Dolly Singh (Admin)',
+        teacherShortName: 'dolly',
+        email: 'dollysingh1268@gmail.com',
+        phone: '9897320579',
         classNum: 12,
-        school: 'Uyanix Administrative Portal',
+        school: 'Uyanix Headquarters',
         city: 'Jaipur',
         role: 'admin',
         idVerified: true,

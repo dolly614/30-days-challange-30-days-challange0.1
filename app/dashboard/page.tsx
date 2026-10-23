@@ -49,11 +49,16 @@ export default function DashboardPage() {
           active = false;
         };
       }
+      if (err === 'admin_only') {
+        toast.dismiss();
+        router.replace('/admin');
+        return () => {
+          active = false;
+        };
+      }
       if (err) {
         setAccessError(err);
-        if (err === 'admin_only') {
-          toast.error('Admin Console Access Restricted: Administrator privileges required.');
-        } else if (err === 'forbidden') {
+        if (err === 'forbidden') {
           toast.error('Access restricted to authorized personnel.');
         }
       }

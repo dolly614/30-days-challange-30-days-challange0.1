@@ -2,12 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   clearSessionCookie,
   extractSessionTokenFromRequest,
-  getAuthenticatedUser,
   getAuthoritativeUser,
   getUserPhoneVerificationStatus,
   hasForbiddenUrlTokenParams,
   rotateSessionToken,
   setSessionCookie,
+  signSessionToken,
   verifyCsrfAndCors,
 } from '@/lib/server-auth';
 
@@ -41,8 +41,9 @@ export async function GET(req: NextRequest) {
     return res;
   }
 
-  const token = extractSessionTokenFromRequest(req);
-  return NextResponse.json(
+  const existingToken = extractSessionTokenFromRequest(req);
+  const token = existingToken || signSessionToken(auth.user);
+  const res = NextResponse.json(
     {
       authenticated: true,
       phoneVerified: getUserPhoneVerificationStatus(auth.user.id),
@@ -51,6 +52,10 @@ export async function GET(req: NextRequest) {
     },
     { headers: { 'Cache-Control': 'no-store' } }
   );
+  if (!existingToken) {
+    setSessionCookie(res, token);
+  }
+  return res;
 }
 
 /**
