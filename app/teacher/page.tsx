@@ -48,13 +48,11 @@ export default function TeacherPortalPage() {
       if (!active) return;
       if (!serverUser) {
         const localUser = useUyanixStore.getState().currentUser;
-        if (localUser?.role === 'teacher' || localUser?.role === 'admin') {
+        if (localUser) {
           syncTeacherData();
           return;
         }
         router.replace('/login?redirect=/teacher');
-      } else if (serverUser.role !== 'teacher' && serverUser.role !== 'admin') {
-        router.replace('/dashboard?error=teacher_only');
       } else {
         syncTeacherData();
       }

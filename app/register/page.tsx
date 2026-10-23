@@ -72,9 +72,16 @@ function RegisterContent() {
   };
 
   useEffect(() => {
-    if (currentUser?.id && !currentUser.idVerified && step === 1) {
-      if (currentUser.role === 'student' && !currentUser.registrationId) {
-        setStep(1);
+    const errParam = searchParams.get('error');
+    if (errParam === 'registration_id_required') {
+      toast.dismiss();
+      router.replace('/register');
+    }
+  }, [searchParams, router]);
+
+  useEffect(() => {
+    if (currentUser?.id && currentUser.role === 'student' && !currentUser.idVerified && step === 1) {
+      if (!currentUser.registrationId) {
         return;
       }
       setStep(2);
@@ -179,6 +186,7 @@ function RegisterContent() {
         },
         credentials: 'include',
         body: JSON.stringify({
+          accountType,
           name: name.trim(),
           classNum: Number(classNum),
           school: school.trim(),
@@ -353,7 +361,11 @@ function RegisterContent() {
             <div className="flex rounded-2xl border border-border bg-muted/60 p-1 text-xs font-semibold">
               <button
                 type="button"
-                onClick={() => setAccountType('student')}
+                onClick={() => {
+                  setAccountType('student');
+                  setServerError('');
+                  setFieldErrors((prev) => ({ ...prev, registrationId: '' }));
+                }}
                 className={`btn-interactive flex-1 flex items-center justify-center gap-1.5 rounded-xl py-2.5 transition ${
                   accountType === 'student' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground'
                 }`}
@@ -362,7 +374,11 @@ function RegisterContent() {
               </button>
               <button
                 type="button"
-                onClick={() => setAccountType('teacher')}
+                onClick={() => {
+                  setAccountType('teacher');
+                  setServerError('');
+                  setFieldErrors((prev) => ({ ...prev, registrationId: '' }));
+                }}
                 className={`btn-interactive flex-1 flex items-center justify-center gap-1.5 rounded-xl py-2.5 transition ${
                   accountType === 'teacher' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground'
                 }`}

@@ -84,6 +84,7 @@ const FORBIDDEN_REGISTRATION_FIELDS = new Set([
 ]);
 
 const ALLOWED_REGISTRATION_FIELDS = new Set([
+  'accountType',
   'name',
   'classNum',
   'school',
@@ -210,13 +211,37 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Validate accountType: only 'student' (default) or 'teacher' is allowed; never 'admin'
+    let requestedRole: 'student' | 'teacher' = 'student';
+    if (bodyObj.accountType !== undefined && bodyObj.accountType !== null) {
+      if (bodyObj.accountType === 'student' || bodyObj.accountType === 'teacher') {
+        requestedRole = bodyObj.accountType;
+      } else {
+        recordServerAuditLog({
+          actorId: `anon_${ip}`,
+          actorEmail: typeof bodyObj.email === 'string' ? bodyObj.email.slice(0, 80) : 'anonymous',
+          actorRole: 'student',
+          action: 'REGISTRATION_PRIVILEGE_ESCALATION_ATTEMPT',
+          target: `Blocked accountType: ${String(bodyObj.accountType).slice(0, 40)}`,
+        });
+        return NextResponse.json(
+          { error: 'Forbidden: Invalid account type specified.' },
+          { status: 403 }
+        );
+      }
+    }
+
     // 5. Server-side validation of each field
     const nameResult = validateFullName(bodyObj.name);
     if (!nameResult.ok) {
       return NextResponse.json({ error: nameResult.error }, { status: 400 });
     }
 
-    const classResult = validateStudentClass(bodyObj.classNum);
+    const rawClassVal =
+      requestedRole === 'teacher' && (bodyObj.classNum === undefined || bodyObj.classNum === null)
+        ? 10
+        : bodyObj.classNum;
+    const classResult = validateStudentClass(rawClassVal);
     if (!classResult.ok) {
       return NextResponse.json({ error: classResult.error }, { status: 400 });
     }
@@ -226,7 +251,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: schoolResult.error }, { status: 400 });
     }
 
-    const regIdResult = validateRegistrationId(bodyObj.registrationId, true);
+    const isStudentAccount = requestedRole === 'student';
+    const regIdResult = validateRegistrationId(bodyObj.registrationId, isStudentAccount);
     if (!regIdResult.ok) {
       return NextResponse.json({ error: regIdResult.error }, { status: 400 });
     }
@@ -331,6 +357,7 @@ export async function POST(req: NextRequest) {
       phone: phoneResult.value,
       email: emailResult.value,
       password,
+      role: requestedRole,
       registrationId: regIdResult.value,
       agreed: true,
       referralCode:

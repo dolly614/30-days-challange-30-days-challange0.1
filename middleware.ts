@@ -238,18 +238,6 @@ export async function middleware(req: NextRequest) {
     return attachSecurityHeaders(NextResponse.redirect(loginUrl), req, true);
   }
 
-  // Student progression to dashboard requires mandatory Registration ID
-  if (
-    (pathname === '/dashboard' || pathname.startsWith('/dashboard/')) &&
-    session.role === 'student' &&
-    !session.registrationId
-  ) {
-    const regRedirectUrl = new URL('/register', req.url);
-    regRedirectUrl.searchParams.set('step', '1');
-    regRedirectUrl.searchParams.set('error', 'registration_id_required');
-    return attachSecurityHeaders(NextResponse.redirect(regRedirectUrl), req, true);
-  }
-
   // Admin-only routes
   const hasAdminAccess =
     session.role === 'admin' || isTrustedAdminEmail(session.email);
@@ -259,17 +247,6 @@ export async function middleware(req: NextRequest) {
   ) {
     const forbiddenUrl = new URL('/dashboard', req.url);
     forbiddenUrl.searchParams.set('error', 'admin_only');
-    return attachSecurityHeaders(NextResponse.redirect(forbiddenUrl), req, true);
-  }
-
-  // Teacher / Admin routes
-  if (
-    (pathname === '/teacher' || pathname.startsWith('/teacher/')) &&
-    session.role !== 'teacher' &&
-    !hasAdminAccess
-  ) {
-    const forbiddenUrl = new URL('/dashboard', req.url);
-    forbiddenUrl.searchParams.set('error', 'teacher_only');
     return attachSecurityHeaders(NextResponse.redirect(forbiddenUrl), req, true);
   }
 

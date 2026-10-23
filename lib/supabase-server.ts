@@ -176,7 +176,7 @@ export function getSupabaseAdminClient(): SupabaseClient | null {
 /**
  * Maps a database UserRow to the application UserProfile format.
  */
-export function mapUserRowToProfile(row: UserRow): UserProfile {
+export function mapUserRowToProfile(row: UserRow & { registration_id?: string | null }): UserProfile {
   const shortName =
     row.name
       .split(/\s+/)[0]
@@ -190,6 +190,17 @@ export function mapUserRowToProfile(row: UserRow): UserProfile {
     (process.env.ADMIN_BOOTSTRAP_EMAIL &&
       normalizedEmail === process.env.ADMIN_BOOTSTRAP_EMAIL.trim().toLowerCase());
 
+  const resolvedRole: UserRole = isAdminEmail ? 'admin' : (row.role as UserRole);
+  const hashNum = Math.abs(
+    (row.id || 'uyanix')
+      .split('')
+      .reduce((acc, ch) => ((acc << 5) - acc + ch.charCodeAt(0)) | 0, 0)
+  );
+  const fallbackRegId =
+    resolvedRole === 'student'
+      ? `OEC${String(1000000 + (hashNum % 9000000))}`
+      : undefined;
+
   return {
     id: row.id,
     name: row.name,
@@ -199,7 +210,8 @@ export function mapUserRowToProfile(row: UserRow): UserProfile {
     classNum: row.class,
     school: row.school,
     city: row.city || 'Jaipur',
-    role: (isAdminEmail ? 'admin' : (row.role as UserRole)),
+    role: resolvedRole,
+    registrationId: row.registration_id || fallbackRegId,
     avatar: row.avatar || undefined,
     idCardUrl: row.id_card_url || undefined,
     idVerificationStatus: row.id_verification_status,

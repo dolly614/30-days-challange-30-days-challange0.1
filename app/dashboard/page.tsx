@@ -42,12 +42,17 @@ export default function DashboardPage() {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
       const err = params.get('error');
+      if (err === 'teacher_only') {
+        toast.dismiss();
+        router.replace('/teacher');
+        return () => {
+          active = false;
+        };
+      }
       if (err) {
         setAccessError(err);
         if (err === 'admin_only') {
           toast.error('Admin Console Access Restricted: Administrator privileges required.');
-        } else if (err === 'teacher_only') {
-          toast.error('Teacher Portal Access Restricted: Educator credentials required.');
         } else if (err === 'forbidden') {
           toast.error('Access restricted to authorized personnel.');
         }
@@ -58,9 +63,6 @@ export default function DashboardPage() {
       if (!active) return;
       if (!serverUser) {
         router.replace('/login?redirect=/dashboard');
-      } else if (serverUser.role === 'student' && !serverUser.registrationId) {
-        toast.error('Registration ID anivarya hai (e.g. OEC2609535). Kripya Registration ID verify karein.');
-        router.replace('/register?step=1&error=registration_id_required');
       } else {
         syncStudentProgress();
         syncLeaderboard();

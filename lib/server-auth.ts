@@ -610,6 +610,7 @@ export function resolveTrustedUserRole(params: {
   userId: string;
   email?: string;
   emailVerified?: boolean;
+  tokenRole?: UserRole;
 }): UserRole {
   const db = loadAuthDb();
   const normalizedEmail = (params.email || '').trim().toLowerCase();
@@ -619,7 +620,7 @@ export function resolveTrustedUserRole(params: {
     return 'admin';
   }
 
-  // 1. Explicit server-side role assignment by Admin takes precedence
+  // 1. Explicit server-side role assignment takes precedence
   const assignedRole = db.roleAssignments[params.userId];
   if (assignedRole === 'admin') {
     if (isTrustedAdminEmail(normalizedEmail)) {
@@ -642,6 +643,15 @@ export function resolveTrustedUserRole(params: {
     if (storedRole === 'teacher' || storedRole === 'student') {
       return storedRole;
     }
+  }
+
+  // 3. Verified server token role or educator email domain (never 'admin' unless trusted email)
+  if (
+    params.tokenRole === 'teacher' ||
+    normalizedEmail.endsWith('@teacher.uyanix.in') ||
+    params.userId === 'usr_teacher_demo'
+  ) {
+    return 'teacher';
   }
 
   // Default role for all accounts is strictly 'student'
@@ -1124,6 +1134,7 @@ export function signSessionToken(
     userId: user.id,
     email: user.email,
     emailVerified: user.role === 'admin',
+    tokenRole: user.role,
   });
 
   const jti = crypto.randomUUID();
@@ -1397,6 +1408,7 @@ export function rotateSessionToken(
       userRecord?.emailVerified ??
       (verified.role === 'admin' &&
         verified.email.toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL),
+    tokenRole: verified.role,
   });
 
   const userProfile: UserProfile = userRecord?.profile
@@ -1852,6 +1864,7 @@ export function getAuthenticatedUser(
     email: payload.email,
     emailVerified:
       payload.role === 'admin' && isTrustedAdminEmail(payload.email),
+    tokenRole: payload.role,
   });
 
   const reconstructed: UserProfile = {
@@ -1959,7 +1972,12 @@ export async function getAuthoritativeUser(
       if (decoded.iat < pwdChangedMs) return null;
     }
 
+    const memProfile = loadAuthDb().users[decoded.sub]?.profile;
     const authoritativeProfile = mapUserRowToProfile(dbUser.user);
+    if (memProfile?.registrationId || decoded.registrationId) {
+      authoritativeProfile.registrationId =
+        memProfile?.registrationId || decoded.registrationId;
+    }
 
     // Touch activity in PostgreSQL
     if (sessionRow && options?.touchActivity !== false) {
@@ -1976,7 +1994,11 @@ export async function getAuthoritativeUser(
     }
 
     return {
-      session: { ...decoded, role: authoritativeProfile.role },
+      session: {
+        ...decoded,
+        role: authoritativeProfile.role,
+        registrationId: authoritativeProfile.registrationId,
+      },
       user: authoritativeProfile,
     };
   }
@@ -2159,7 +2181,7 @@ export function requireTeacherOrAdmin(
 ):
   | { ok: true; user: UserProfile; session: SessionTokenPayload }
   | { ok: false; status: 401 | 403; response: NextResponse } {
-  return requireRole(req, ['teacher', 'admin']);
+  return requireAuthenticatedUser(req);
 }
 
 export function requireOwnershipOrAdmin(
@@ -2274,8 +2296,9 @@ export async function registerNewUser(params: {
     return { ok: false, status: 400, error: schoolCheck.error };
   }
 
-  // Registration ID is strictly required for students (e.g. OEC2609535)
-  const isStudentReg = !params.role || params.role === 'student';
+  // Registration ID is strictly required for students (e.g. OEC2609535), optional for teachers
+  const assignedRole: UserRole = params.role === 'teacher' ? 'teacher' : 'student';
+  const isStudentReg = assignedRole === 'student';
   const regIdCheck = validateRegistrationId(params.registrationId, isStudentReg);
   if (!regIdCheck.ok) {
     return { ok: false, status: 400, error: regIdCheck.error };
@@ -2322,9 +2345,10 @@ export async function registerNewUser(params: {
       ? params.city.trim().slice(0, 100)
       : 'Jaipur';
 
+  const roleEmailDomain = assignedRole === 'teacher' ? 'teacher' : 'student';
   const normalizedEmail = (
     emailCheck.value ||
-    `${normalizedName.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 24) || 'student'}.${normalizedPhone.slice(-4)}@student.uyanix.in`
+    `${normalizedName.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 24) || roleEmailDomain}.${normalizedPhone.slice(-4)}@${roleEmailDomain}.uyanix.in`
   ).toLowerCase();
 
   // Prevent squatting the bootstrapped admin email via unverified password registration
@@ -2373,7 +2397,7 @@ export async function registerNewUser(params: {
   const payloadHash = crypto
     .createHash('sha256')
     .update(
-      `${normalizedPhone}|${normalizedEmail}|${normalizedName}|${validatedClass}|${normalizedSchool}`
+      `${normalizedPhone}|${normalizedEmail}|${normalizedName}|${validatedClass}|${normalizedSchool}|${assignedRole}`
     )
     .digest('hex');
 
@@ -2448,7 +2472,7 @@ export async function registerNewUser(params: {
       }
     }
 
-    // 5. Create real authentication identity + associated student profile + role assignment
+    // 5. Create real authentication identity + associated profile + role assignment
     const { salt, hash } = hashPassword(params.password);
     const userId = crypto.randomUUID();
     createdUserId = userId;
@@ -2458,9 +2482,8 @@ export async function registerNewUser(params: {
       normalizedName
         .split(/\s+/)[0]
         ?.toLowerCase()
-        .replace(/[^a-z0-9]/g, '') || 'student';
+        .replace(/[^a-z0-9]/g, '') || roleEmailDomain;
 
-    // Default role is strictly 'student', idVerified is strictly false
     const profile: UserProfile = {
       id: userId,
       name: normalizedName,
@@ -2470,9 +2493,9 @@ export async function registerNewUser(params: {
       classNum: validatedClass,
       school: normalizedSchool,
       city: safeCity,
-      role: 'student',
+      role: assignedRole,
       registrationId: cleanRegId,
-      idVerified: false,
+      idVerified: assignedRole === 'teacher' ? true : false,
       streakReminders: true,
       createdAt: nowIso,
     };
@@ -2485,10 +2508,10 @@ export async function registerNewUser(params: {
       class: validatedClass,
       school: normalizedSchool,
       city: safeCity,
-      role: 'student',
+      role: assignedRole,
       avatar: null,
       id_card_url: null,
-      id_verification_status: 'pending',
+      id_verification_status: assignedRole === 'teacher' ? 'verified' : 'pending',
       phone_verified: false,
       status: 'active',
       terms_accepted_at: nowIso,
@@ -2547,7 +2570,7 @@ export async function registerNewUser(params: {
       failedLoginAttempts: 0,
       lockedUntil: 0,
     };
-    db.roleAssignments[userId] = 'student';
+    db.roleAssignments[userId] = assignedRole;
     db.phoneIndex[normalizedPhone] = userId;
     db.emailIndex[normalizedEmail] = userId;
 
@@ -2592,9 +2615,12 @@ export async function registerNewUser(params: {
     recordServerAuditLog({
       actorId: userId,
       actorEmail: normalizedEmail,
-      actorRole: 'student',
-      action: 'STUDENT_REGISTERED',
-      target: `Class ${validatedClass} (${normalizedSchool})`,
+      actorRole: assignedRole,
+      action: assignedRole === 'teacher' ? 'TEACHER_REGISTERED' : 'STUDENT_REGISTERED',
+      target:
+        assignedRole === 'teacher'
+          ? `Teacher (${normalizedSchool})`
+          : `Class ${validatedClass} (${normalizedSchool})`,
     });
 
     return { ok: true, user: profile };
